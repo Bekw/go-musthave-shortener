@@ -8,10 +8,13 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Bekw/go-musthave-shortener/internal/config"
+
 	"github.com/go-chi/chi/v5"
 )
 
 var urlStore = make(map[string]string)
+var cfg *config.Config
 
 func generateID() string {
 	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -44,7 +47,7 @@ func postHandler(w http.ResponseWriter, r *http.Request) {
 	id := generateID()
 	urlStore[id] = originalURL
 
-	shortURL := fmt.Sprintf("http://localhost:8080/%s", id)
+	shortURL := fmt.Sprintf("%s/%s", cfg.BaseURL, id)
 
 	w.WriteHeader(http.StatusCreated)
 	w.Header().Set("Content-Type", "text/plain")
@@ -52,12 +55,7 @@ func postHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func getHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "only GET allowed", http.StatusBadRequest)
-		return
-	}
-
-	id := strings.TrimPrefix(r.URL.Path, "/")
+	id := chi.URLParam(r, "id")
 	if id == "" {
 		http.Error(w, "missing id", http.StatusBadRequest)
 		return
@@ -74,11 +72,13 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	cfg = config.NewConfig()
+
 	r := chi.NewRouter()
 
 	r.Post("/", postHandler)
 	r.Get("/{id}", getHandler)
 
-	fmt.Println("Server started at :8080")
-	log.Fatal(http.ListenAndServe(":8080", r))
+	fmt.Printf("Server started at %s\n", cfg.Address)
+	log.Fatal(http.ListenAndServe(cfg.Address, r))
 }
