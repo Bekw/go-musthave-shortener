@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Bekw/go-musthave-shortener/internal/config"
+	"github.com/go-chi/chi/v5"
 )
 
 func TestPostHandler(t *testing.T) {
@@ -39,9 +40,12 @@ func TestGetHandler(t *testing.T) {
 	id := "abc123"
 	urlStore[id] = "http://example.com"
 
+	r := chi.NewRouter()
+	r.Get("/{id}", getHandler)
+
 	req := httptest.NewRequest(http.MethodGet, "/"+id, nil)
 	w := httptest.NewRecorder()
-	getHandler(w, req)
+	r.ServeHTTP(w, req)
 
 	res := w.Result()
 	defer res.Body.Close()
