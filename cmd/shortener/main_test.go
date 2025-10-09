@@ -6,9 +6,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/Bekw/go-musthave-shortener/internal/config"
 )
 
 func TestPostHandler(t *testing.T) {
+	cfg = &config.Config{Address: "localhost:8080", BaseURL: "http://localhost:8080"}
+
 	body := strings.NewReader("http://example.com")
 
 	req := httptest.NewRequest(http.MethodPost, "/", body)
@@ -30,6 +34,8 @@ func TestPostHandler(t *testing.T) {
 	}
 }
 func TestGetHandler(t *testing.T) {
+	cfg = &config.Config{Address: "localhost:8080", BaseURL: "http://localhost:8080"}
+
 	id := "abc123"
 	urlStore[id] = "http://example.com"
 
