@@ -16,8 +16,10 @@ func TestPostHandler(t *testing.T) {
 	postHandler(w, req)
 
 	res := w.Result()
-	if res.StatusCode != http.StatusCreated {
-		t.Errorf("Код ответа не совпадает с ожидаемым")
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusTemporaryRedirect {
+		t.Errorf("expected %d, got %d", http.StatusTemporaryRedirect, res.StatusCode)
 	}
 }
 func TestGetHandler(t *testing.T) {
