@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -8,7 +9,8 @@ import (
 )
 
 func TestPostHandler(t *testing.T) {
-	body := strings.NewReader("https://practicum.yandex.kz/")
+	body := strings.NewReader("http://example.com")
+
 	req := httptest.NewRequest(http.MethodPost, "/", body)
 	req.Header.Set("Content-Type", "text/plain")
 
@@ -18,23 +20,32 @@ func TestPostHandler(t *testing.T) {
 	res := w.Result()
 	defer res.Body.Close()
 
-	if res.StatusCode != http.StatusTemporaryRedirect {
-		t.Errorf("expected %d, got %d", http.StatusTemporaryRedirect, res.StatusCode)
+	if res.StatusCode != http.StatusCreated {
+		t.Errorf("expected %d, got %d", http.StatusCreated, res.StatusCode)
+	}
+
+	respBody, _ := io.ReadAll(res.Body)
+	if !strings.Contains(string(respBody), "http://localhost:8080/") {
+		t.Errorf("expected short url, got %s", string(respBody))
 	}
 }
 func TestGetHandler(t *testing.T) {
-	id := "testId"
-	urlStore[id] = "https://practicum.yandex.kz/"
+	id := "abc123"
+	urlStore[id] = "http://example.com"
 
 	req := httptest.NewRequest(http.MethodGet, "/"+id, nil)
 	w := httptest.NewRecorder()
 	getHandler(w, req)
 
 	res := w.Result()
+	defer res.Body.Close()
+
 	if res.StatusCode != http.StatusTemporaryRedirect {
-		t.Errorf("Код ответа не совпадает с ожидаемым")
+		t.Errorf("expected %d, got %d", http.StatusTemporaryRedirect, res.StatusCode)
 	}
-	if loc := res.Header.Get("Location"); loc != "https://practicum.yandex.kz/" {
-		t.Errorf("Адрес не совпадает с ожидаемым")
+
+	loc := res.Header.Get("Location")
+	if loc != "http://example.com" {
+		t.Errorf("expected redirect to %s, got %s", "http://example.com", loc)
 	}
 }
