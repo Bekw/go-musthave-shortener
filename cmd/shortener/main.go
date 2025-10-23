@@ -7,7 +7,6 @@ import (
 	"math/rand"
 	"net/http"
 	"strings"
-
 	"github.com/go-chi/chi/v5"
 )
 
@@ -81,4 +80,17 @@ func main() {
 
 	fmt.Println("Server started at :8080")
 	log.Fatal(http.ListenAndServe(":8080", r))
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			postHandler(w, r)
+		} else if r.Method == http.MethodGet && r.URL.Path != "/" {
+			getHandler(w, r)
+		} else {
+			http.Error(w, "bad request", http.StatusBadRequest)
+		}
+	})
+
+	fmt.Println("Server started at :8080")
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
