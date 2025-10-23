@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"net/http"
 	"strings"
+	"github.com/go-chi/chi/v5"
 )
 
 var urlStore = make(map[string]string)
@@ -72,6 +73,14 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	r := chi.NewRouter()
+
+	r.Post("/", postHandler)
+	r.Get("/{id}", getHandler)
+
+	fmt.Println("Server started at :8080")
+	log.Fatal(http.ListenAndServe(":8080", r))
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			postHandler(w, r)
