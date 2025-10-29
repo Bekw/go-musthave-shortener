@@ -32,6 +32,8 @@ func main() {
 
 	r.Post("/", h.PostHandler)
 	r.Get("/{id}", h.GetHandler)
+	// 7 - инкремент
+	r.Post("/api/shorten", h.PostJSONHandler)
 
 	log.Printf("Server running on %s", cfg.Address)
 	log.Fatal(http.ListenAndServe(cfg.Address, r))
