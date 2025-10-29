@@ -37,7 +37,6 @@ func main() {
 	r.Use(appmw.Gzip())
 
 	r.Post("/", h.PostHandler)
-
 	r.Post("/api/shorten", h.PostJSONHandler)
 	r.Get("/{id}", h.GetHandler)
 
