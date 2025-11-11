@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +21,7 @@ func newTestServer() (*chi.Mux, string) {
 
 	r := chi.NewRouter()
 	r.Post("/", h.PostHandler)
+	r.Post("/api/shorten", h.PostJSONHandler)
 	r.Get("/{id}", h.GetHandler)
 	return r, base
 }
@@ -127,6 +130,67 @@ func TestPostHandler_EmptyBody(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
+	res := w.Result()
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected %d, got %d", http.StatusBadRequest, res.StatusCode)
+	}
+}
+func TestPostJSONHandler_Created(t *testing.T) {
+	r, _ := newTestServer()
+
+	body := []byte(`{"url":"http://example.com"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+	res := w.Result()
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("expected %d, got %d", http.StatusCreated, res.StatusCode)
+	}
+	ct := res.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("expected application/json, got %s", ct)
+	}
+
+	var got struct {
+		Result string `json:"result"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&got); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if !strings.HasPrefix(got.Result, "http://localhost:8080/") {
+		t.Fatalf("unexpected result: %s", got.Result)
+	}
+}
+
+func TestPostJSONHandler_BadContentType(t *testing.T) {
+	r, _ := newTestServer()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader([]byte(`{"url":"http://example.com"}`)))
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+	res := w.Result()
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected %d, got %d", http.StatusBadRequest, res.StatusCode)
+	}
+}
+
+func TestPostJSONHandler_InvalidJSON(t *testing.T) {
+	r, _ := newTestServer()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/shorten", bytes.NewReader([]byte(`{"url":""}`)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
 	res := w.Result()
 	defer res.Body.Close()
 
