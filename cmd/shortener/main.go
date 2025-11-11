@@ -29,6 +29,7 @@ func main() {
 
 	r := chi.NewRouter()
 	r.Use(appmw.Logger(logger))
+	r.Use(appmw.Gzip())
 
 	r.Post("/", h.PostHandler)
 	r.Get("/{id}", h.GetHandler)
