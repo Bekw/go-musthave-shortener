@@ -13,12 +13,15 @@ type Store interface {
 }
 
 type memoryStore struct {
-	mu sync.RWMutex
+	mu *sync.RWMutex
 	mp map[string]string
 }
 
 func NewMemoryStore() Store {
-	return &memoryStore{mp: make(map[string]string)}
+	return &memoryStore{
+		mu: new(sync.RWMutex),
+		mp: make(map[string]string),
+	}
 }
 
 func (m *memoryStore) Save(id, url string) error {
