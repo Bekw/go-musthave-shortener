@@ -1,11 +1,15 @@
 package model
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
+
+var ErrCollision = errors.New("id already exists")
 
 type Store interface {
-	Set(id, url string)
+	Save(id, url string) error
 	Get(id string) (string, bool)
-	Exists(id string) bool
 }
 
 type memoryStore struct {
@@ -17,22 +21,20 @@ func NewMemoryStore() Store {
 	return &memoryStore{mp: make(map[string]string)}
 }
 
-func (m *memoryStore) Set(id, url string) {
+func (m *memoryStore) Save(id, url string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if _, ok := m.mp[id]; ok {
+		return ErrCollision
+	}
 	m.mp[id] = url
+	return nil
 }
 
 func (m *memoryStore) Get(id string) (string, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	url, ok := m.mp[id]
-	return url, ok
-}
-
-func (m *memoryStore) Exists(id string) bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	_, ok := m.mp[id]
-	return ok
+	u, ok := m.mp[id]
+	return u, ok
 }

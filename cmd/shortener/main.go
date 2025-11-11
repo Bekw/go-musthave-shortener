@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"net/http"
 
@@ -12,7 +13,11 @@ import (
 )
 
 func main() {
-	cfg := config.NewConfig()
+	addrFlag := flag.String("a", config.DefaultAddress, "HTTP server address")
+	baseFlag := flag.String("b", config.DefaultBaseURL, "Base URL for short links")
+	flag.Parse()
+
+	cfg := config.NewConfig(*addrFlag, *baseFlag)
 
 	store := model.NewMemoryStore()
 	h := handler.NewHandler(store, cfg.BaseURL)

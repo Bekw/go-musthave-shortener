@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"io"
 	"log"
 	"math/rand"
@@ -45,13 +46,25 @@ func (h *Handler) PostHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	original := strings.TrimSpace(string(body))
-	id := generateID()
 
-	for h.store.Exists(id) {
+	const maxAttempts = 5
+	var id string
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		id = generateID()
+		if err := h.store.Save(id, original); err != nil {
+			if errors.Is(err, model.ErrCollision) {
+				continue
+			}
+			log.Printf("store save error: %v", err)
+			http.Error(w, "internal error", http.StatusBadRequest)
+			return
+		}
+		break
 	}
-
-	h.store.Set(id, original)
+	if id == "" {
+		http.Error(w, "cannot allocate id", http.StatusBadRequest)
+		return
+	}
 
 	shortURL, err := url.JoinPath(h.baseURL, id)
 	if err != nil {
