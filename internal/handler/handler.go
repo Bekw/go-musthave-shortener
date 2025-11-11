@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -12,12 +11,15 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"go.uber.org/zap"
+
 	"github.com/Bekw/go-musthave-shortener/internal/model"
 )
 
 type Handler struct {
 	store   model.Store
 	baseURL string
+	log     *zap.Logger
 }
 type shortenRequest struct {
 	URL string `json:"url"`
@@ -37,8 +39,8 @@ func generateID() string {
 	return string(b)
 }
 
-func NewHandler(store model.Store, baseURL string) *Handler {
-	return &Handler{store: store, baseURL: strings.TrimSuffix(baseURL, "/")}
+func NewHandler(store model.Store, baseURL string, log *zap.Logger) *Handler {
+	return &Handler{store: store, baseURL: baseURL, log: log}
 }
 
 func (h *Handler) PostHandler(w http.ResponseWriter, r *http.Request) {
@@ -63,7 +65,7 @@ func (h *Handler) PostHandler(w http.ResponseWriter, r *http.Request) {
 			if errors.Is(err, model.ErrCollision) {
 				continue
 			}
-			log.Printf("store save error: %v", err)
+			h.log.Error("store save error: %v", zap.Error(err))
 			http.Error(w, "internal error", http.StatusBadRequest)
 			return
 		}
@@ -83,7 +85,7 @@ func (h *Handler) PostHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusCreated)
 	if _, err := w.Write([]byte(shortURL)); err != nil {
-		log.Printf("write response error: %v", err)
+		h.log.Error("response error: %v", zap.Error(err))
 	}
 }
 
@@ -130,7 +132,8 @@ func (h *Handler) PostJSONHandler(w http.ResponseWriter, r *http.Request) {
 			if errors.Is(err, model.ErrCollision) {
 				continue
 			}
-			log.Printf("store save error: %v", err)
+
+			h.log.Error("store save error: %v", zap.Error(err))
 			http.Error(w, "internal error", http.StatusBadRequest)
 			return
 		}
@@ -150,6 +153,6 @@ func (h *Handler) PostJSONHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	if err := json.NewEncoder(w).Encode(shortenResponse{Result: shortURL}); err != nil {
-		log.Printf("write response error: %v", err)
+		h.log.Error("encoding error: %v", zap.Error(err))
 	}
 }

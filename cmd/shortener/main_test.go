@@ -13,11 +13,14 @@ import (
 
 	"github.com/Bekw/go-musthave-shortener/internal/handler"
 	"github.com/Bekw/go-musthave-shortener/internal/model"
+	"go.uber.org/zap"
 )
 
 func newTestServer() (*chi.Mux, string) {
 	base := "http://localhost:8080"
-	h := handler.NewHandler(model.NewMemoryStore(), base)
+	logger := zap.NewNop()
+
+	h := handler.NewHandler(model.NewMemoryStore(), base, logger)
 
 	r := chi.NewRouter()
 	r.Post("/", h.PostHandler)

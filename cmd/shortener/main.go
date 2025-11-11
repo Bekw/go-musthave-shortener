@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"log"
 	"net/http"
 
@@ -15,26 +14,31 @@ import (
 )
 
 func main() {
-	addrFlag := flag.String("a", config.DefaultAddress, "HTTP server address")
-	baseFlag := flag.String("b", config.DefaultBaseURL, "Base URL for short links")
-	flag.Parse()
+	cfg := config.FromFlags()
+
+	var store model.Store
+	var err error
+	if cfg.FilePath != "" {
+		store, err = model.NewFileStore(cfg.FilePath)
+		if err != nil {
+			log.Fatalf("init file store: %v", err)
+		}
+	} else {
+		store = model.NewMemoryStore()
+	}
 
 	logger, _ := zap.NewProduction()
 	defer logger.Sync()
 
-	cfg := config.NewConfig(*addrFlag, *baseFlag)
-
-	store := model.NewMemoryStore()
-	h := handler.NewHandler(store, cfg.BaseURL)
+	h := handler.NewHandler(store, cfg.BaseURL, logger)
 
 	r := chi.NewRouter()
 	r.Use(appmw.Logger(logger))
 	r.Use(appmw.Gzip())
 
 	r.Post("/", h.PostHandler)
-	r.Get("/{id}", h.GetHandler)
-	// 7 - инкремент
 	r.Post("/api/shorten", h.PostJSONHandler)
+	r.Get("/{id}", h.GetHandler)
 
 	log.Printf("Server running on %s", cfg.Address)
 	log.Fatal(http.ListenAndServe(cfg.Address, r))
