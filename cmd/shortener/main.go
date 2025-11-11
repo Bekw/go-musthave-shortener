@@ -6,9 +6,11 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"go.uber.org/zap"
 
 	"github.com/Bekw/go-musthave-shortener/internal/config"
 	"github.com/Bekw/go-musthave-shortener/internal/handler"
+	appmw "github.com/Bekw/go-musthave-shortener/internal/middleware"
 	"github.com/Bekw/go-musthave-shortener/internal/model"
 )
 
@@ -17,12 +19,17 @@ func main() {
 	baseFlag := flag.String("b", config.DefaultBaseURL, "Base URL for short links")
 	flag.Parse()
 
+	logger, _ := zap.NewProduction()
+	defer logger.Sync()
+
 	cfg := config.NewConfig(*addrFlag, *baseFlag)
 
 	store := model.NewMemoryStore()
 	h := handler.NewHandler(store, cfg.BaseURL)
 
 	r := chi.NewRouter()
+	r.Use(appmw.Logger(logger))
+
 	r.Post("/", h.PostHandler)
 	r.Get("/{id}", h.GetHandler)
 
