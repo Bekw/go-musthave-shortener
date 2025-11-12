@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -8,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -20,6 +23,7 @@ type Handler struct {
 	store   model.Store
 	baseURL string
 	log     *zap.Logger
+	db      *sql.DB
 }
 type shortenRequest struct {
 	URL string `json:"url"`
@@ -40,7 +44,14 @@ func generateID() string {
 }
 
 func NewHandler(store model.Store, baseURL string, log *zap.Logger) *Handler {
+	if log == nil {
+		log = zap.NewNop()
+	}
 	return &Handler{store: store, baseURL: baseURL, log: log}
+}
+
+func (h *Handler) SetDB(db *sql.DB) {
+	h.db = db
 }
 
 func (h *Handler) PostHandler(w http.ResponseWriter, r *http.Request) {
@@ -155,4 +166,19 @@ func (h *Handler) PostJSONHandler(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(shortenResponse{Result: shortURL}); err != nil {
 		h.log.Error("encoding error: %v", zap.Error(err))
 	}
+}
+
+func (h *Handler) PingHandler(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		http.Error(w, "db is not configured", http.StatusInternalServerError)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 1*time.Second)
+	defer cancel()
+	if err := h.db.PingContext(ctx); err != nil {
+		h.log.Error("db ping failed", zap.Error(err))
+		http.Error(w, "db unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
