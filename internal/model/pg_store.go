@@ -45,3 +45,14 @@ func (s *PGStore) Get(id string) (string, bool) {
 	}
 	return original, true
 }
+
+func EnsureSchema(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS urls (
+			id           TEXT PRIMARY KEY,
+			original_url TEXT NOT NULL,
+			created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
+	`)
+	return err
+}

@@ -44,6 +44,11 @@ func main() {
 
 	if cfg.DatabaseDSN != "" {
 		db := mustInitDB(cfg.DatabaseDSN, logger)
+
+		if err := model.EnsureSchema(context.Background(), db); err != nil {
+			logger.Fatal("db ensure schema failed", zap.Error(err))
+		}
+
 		store = model.NewPGStore(db)
 	} else if cfg.FilePath != "" {
 		fs, err := model.NewFileStore(cfg.FilePath)
