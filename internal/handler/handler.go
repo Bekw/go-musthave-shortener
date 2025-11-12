@@ -25,12 +25,23 @@ type Handler struct {
 	log     *zap.Logger
 	db      *sql.DB
 }
+
 type shortenRequest struct {
 	URL string `json:"url"`
 }
 
 type shortenResponse struct {
 	Result string `json:"result"`
+}
+
+type batchReqItem struct {
+	CorrelationID string `json:"correlation_id"`
+	OriginalURL   string `json:"original_url"`
+}
+
+type batchResItem struct {
+	CorrelationID string `json:"correlation_id"`
+	ShortURL      string `json:"short_url"`
 }
 
 func generateID() string {
@@ -181,4 +192,60 @@ func (h *Handler) PingHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+func (h *Handler) PostBatchHandler(w http.ResponseWriter, r *http.Request) {
+	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		http.Error(w, "Content-Type must be application/json", http.StatusBadRequest)
+		return
+	}
+
+	var in []batchReqItem
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if len(in) == 0 {
+		http.Error(w, "empty batch", http.StatusBadRequest)
+		return
+	}
+
+	out := make([]batchResItem, 0, len(in))
+
+	for _, it := range in {
+		urlStr := strings.TrimSpace(it.OriginalURL)
+		if urlStr == "" || it.CorrelationID == "" {
+			http.Error(w, "empty url or correlation_id", http.StatusBadRequest)
+			return
+		}
+
+		var id string
+		for {
+			id = generateID()
+			if err := h.store.Save(id, urlStr); err != nil {
+				if errors.Is(err, model.ErrCollision) {
+					continue
+				}
+				http.Error(w, "storage error", http.StatusInternalServerError)
+				return
+			}
+			break
+		}
+
+		short, err := url.JoinPath(h.baseURL, id)
+		if err != nil {
+			http.Error(w, "bad base url", http.StatusBadRequest)
+			return
+		}
+
+		out = append(out, batchResItem{
+			CorrelationID: it.CorrelationID,
+			ShortURL:      short,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(out)
 }
