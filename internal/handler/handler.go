@@ -83,12 +83,18 @@ func (h *Handler) PostHandler(w http.ResponseWriter, r *http.Request) {
 	var id string
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		id = generateID()
-		if err := h.store.Save(id, original); err != nil {
-			if errors.Is(err, model.ErrCollision) {
-				continue
+
+		err := h.store.Save(id, original)
+		if err != nil {
+			var dup *model.DuplicateURLError
+			if errors.As(err, &dup) {
+				short, _ := url.JoinPath(h.baseURL, dup.ExistingID)
+				w.Header().Set("Content-Type", "text/plain")
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(short))
+				return
 			}
-			h.log.Error("store save error: %v", zap.Error(err))
-			http.Error(w, "internal error", http.StatusBadRequest)
+			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
 		break
@@ -151,12 +157,18 @@ func (h *Handler) PostJSONHandler(w http.ResponseWriter, r *http.Request) {
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		id = generateID()
 		if err := h.store.Save(id, original); err != nil {
+			var dup *model.DuplicateURLError
+			if errors.As(err, &dup) {
+				short, _ := url.JoinPath(h.baseURL, dup.ExistingID)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]string{"result": short})
+				return
+			}
 			if errors.Is(err, model.ErrCollision) {
 				continue
 			}
-
-			h.log.Error("store save error: %v", zap.Error(err))
-			http.Error(w, "internal error", http.StatusBadRequest)
+			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
 		break

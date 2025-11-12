@@ -41,6 +41,7 @@ func main() {
 	defer logger.Sync()
 
 	var store model.Store
+	var db *sql.DB
 
 	if cfg.DatabaseDSN != "" {
 		db := mustInitDB(cfg.DatabaseDSN, logger)
@@ -60,10 +61,6 @@ func main() {
 		store = model.NewMemoryStore()
 	}
 
-	var db *sql.DB
-	if cfg.DatabaseDSN != "" {
-		db = mustInitDB(cfg.DatabaseDSN, logger)
-	}
 	h := handler.NewHandler(store, cfg.BaseURL, logger)
 	h.SetDB(db)
 

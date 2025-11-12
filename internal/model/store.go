@@ -17,6 +17,10 @@ type memoryStore struct {
 	mp map[string]string
 }
 
+type DuplicateURLError struct {
+	ExistingID string
+}
+
 func NewMemoryStore() Store {
 	return &memoryStore{
 		mu: new(sync.RWMutex),
@@ -40,4 +44,8 @@ func (m *memoryStore) Get(id string) (string, bool) {
 	defer m.mu.RUnlock()
 	u, ok := m.mp[id]
 	return u, ok
+}
+
+func (e *DuplicateURLError) Error() string {
+	return "this url already exists"
 }

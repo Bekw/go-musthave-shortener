@@ -16,18 +16,20 @@ func NewPGStore(db *sql.DB) *PGStore {
 }
 
 func (s *PGStore) Save(id, url string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
+	const q = `
+		INSERT INTO urls (id, original_url)
+		VALUES ($1, $2)
+		ON CONFLICT (original_url)
+		DO UPDATE SET original_url = EXCLUDED.original_url
+		RETURNING id;
+	`
 
-	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO urls (id, original_url) VALUES ($1, $2)
-		ON CONFLICT (id) DO NOTHING
-	`, id, url)
-	if err != nil {
+	var retID string
+	if err := s.db.QueryRowContext(context.Background(), q, id, url).Scan(&retID); err != nil {
 		return err
 	}
-	if rows, _ := res.RowsAffected(); rows == 0 {
-		return ErrCollision
+	if retID != id {
+		return &DuplicateURLError{ExistingID: retID}
 	}
 	return nil
 }
@@ -47,12 +49,28 @@ func (s *PGStore) Get(id string) (string, bool) {
 }
 
 func EnsureSchema(ctx context.Context, db *sql.DB) error {
-	_, err := db.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS urls (
-			id           TEXT PRIMARY KEY,
-			original_url TEXT NOT NULL,
-			created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-		);
-	`)
-	return err
+	if _, err := db.ExecContext(ctx, `
+        CREATE TABLE IF NOT EXISTS urls (
+            id           TEXT PRIMARY KEY,
+            original_url TEXT NOT NULL,
+            created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+    `); err != nil {
+		return err
+	}
+
+	if _, err := db.ExecContext(ctx, `
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'urls_original_url_key'
+            ) THEN
+                ALTER TABLE urls
+                    ADD CONSTRAINT urls_original_url_key UNIQUE (original_url);
+            END IF;
+        END $$;
+    `); err != nil {
+		return err
+	}
+	return nil
 }
