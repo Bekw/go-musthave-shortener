@@ -82,10 +82,8 @@ func (h *Handler) PostHandler(w http.ResponseWriter, r *http.Request) {
 	const maxAttempts = 5
 	var id string
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		id = generateID()
-
-		err := h.store.Save(id, original)
-		if err != nil {
+		try := generateID()
+		if err := h.store.Save(try, original); err != nil {
 			var dup *model.DuplicateURLError
 			if errors.As(err, &dup) {
 				short, _ := url.JoinPath(h.baseURL, dup.ExistingID)
@@ -94,13 +92,17 @@ func (h *Handler) PostHandler(w http.ResponseWriter, r *http.Request) {
 				_, _ = w.Write([]byte(short))
 				return
 			}
+			if errors.Is(err, model.ErrCollision) {
+				continue
+			}
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+		id = try
 		break
 	}
 	if id == "" {
-		http.Error(w, "cannot allocate id", http.StatusBadRequest)
+		http.Error(w, "cannot allocate id", http.StatusInternalServerError)
 		return
 	}
 
@@ -155,14 +157,14 @@ func (h *Handler) PostJSONHandler(w http.ResponseWriter, r *http.Request) {
 	const maxAttempts = 5
 	var id string
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		id = generateID()
-		if err := h.store.Save(id, original); err != nil {
+		try := generateID()
+		if err := h.store.Save(try, original); err != nil {
 			var dup *model.DuplicateURLError
 			if errors.As(err, &dup) {
 				short, _ := url.JoinPath(h.baseURL, dup.ExistingID)
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusConflict)
-				_ = json.NewEncoder(w).Encode(map[string]string{"result": short})
+				_ = json.NewEncoder(w).Encode(shortenResponse{Result: short})
 				return
 			}
 			if errors.Is(err, model.ErrCollision) {
@@ -171,10 +173,11 @@ func (h *Handler) PostJSONHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
+		id = try
 		break
 	}
 	if id == "" {
-		http.Error(w, "cannot allocate id", http.StatusBadRequest)
+		http.Error(w, "cannot allocate id", http.StatusInternalServerError)
 		return
 	}
 
@@ -193,10 +196,10 @@ func (h *Handler) PostJSONHandler(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) PingHandler(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
-		http.Error(w, "db is not configured", http.StatusInternalServerError)
+		w.WriteHeader(http.StatusOK)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 1*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), time.Second)
 	defer cancel()
 	if err := h.db.PingContext(ctx); err != nil {
 		h.log.Error("db ping failed", zap.Error(err))
@@ -232,17 +235,23 @@ func (h *Handler) PostBatchHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		const maxAttempts = 5
 		var id string
-		for {
-			id = generateID()
-			if err := h.store.Save(id, urlStr); err != nil {
+		for attempt := 0; attempt < maxAttempts; attempt++ {
+			try := generateID()
+			if err := h.store.Save(try, urlStr); err != nil {
 				if errors.Is(err, model.ErrCollision) {
 					continue
 				}
 				http.Error(w, "storage error", http.StatusInternalServerError)
 				return
 			}
+			id = try
 			break
+		}
+		if id == "" {
+			http.Error(w, "cannot allocate id", http.StatusInternalServerError)
+			return
 		}
 
 		short, err := url.JoinPath(h.baseURL, id)

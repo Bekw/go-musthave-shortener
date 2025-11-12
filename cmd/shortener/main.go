@@ -44,7 +44,7 @@ func main() {
 	var db *sql.DB
 
 	if cfg.DatabaseDSN != "" {
-		db := mustInitDB(cfg.DatabaseDSN, logger)
+		db = mustInitDB(cfg.DatabaseDSN, logger)
 
 		if err := model.EnsureSchema(context.Background(), db); err != nil {
 			logger.Fatal("db ensure schema failed", zap.Error(err))

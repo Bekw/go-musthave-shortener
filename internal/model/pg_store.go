@@ -60,17 +60,11 @@ func EnsureSchema(ctx context.Context, db *sql.DB) error {
 	}
 
 	if _, err := db.ExecContext(ctx, `
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'urls_original_url_key'
-            ) THEN
-                ALTER TABLE urls
-                    ADD CONSTRAINT urls_original_url_key UNIQUE (original_url);
-            END IF;
-        END $$;
-    `); err != nil {
+		CREATE UNIQUE INDEX IF NOT EXISTS urls_original_url_idx
+		ON urls (original_url);
+	`); err != nil {
 		return err
 	}
+
 	return nil
 }
