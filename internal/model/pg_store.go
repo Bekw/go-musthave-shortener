@@ -3,9 +3,10 @@ package model
 import (
 	"context"
 	"database/sql"
+	"errors"
 
-	"github.com/jackc/pgconn"
 	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type PGStore struct {
@@ -18,33 +19,36 @@ func NewPGStore(db *sql.DB) *PGStore {
 
 func (s *PGStore) Save(ctx context.Context, id, url string) error {
 	const q = `
-INSERT INTO urls (id, original_url)
-VALUES ($1, $2)
-ON CONFLICT (id) DO NOTHING;`
+		INSERT INTO urls (id, original_url)
+		VALUES ($1, $2)
+		ON CONFLICT (id) DO NOTHING;
+	`
 
 	res, err := s.db.ExecContext(ctx, q, id, url)
 	if err != nil {
-		if pgErr, ok := err.(*pgconn.PgError); ok && pgErr.Code == pgerrcode.UniqueViolation {
-			return ErrCollision
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
+			existID, ok, e := s.FindByOriginal(ctx, url)
+			if e != nil {
+				return e
+			}
+			if ok {
+				return &DuplicateURLError{ExistingID: existID}
+			}
+			return ErrDuplicateOriginal
 		}
 		return err
 	}
-	aff, _ := res.RowsAffected()
-	if aff == 1 {
-		return nil
-	}
 
-	var existingID string
-	err = s.db.QueryRowContext(ctx,
-		`SELECT id FROM urls WHERE original_url = $1`, url,
-	).Scan(&existingID)
-	if err == nil {
-		return ErrDuplicateOriginal
+	aff, err := res.RowsAffected()
+	if err != nil {
+		return err
 	}
-	if err == sql.ErrNoRows {
+	if aff == 0 {
 		return ErrCollision
 	}
-	return err
+
+	return nil
 }
 
 func (s *PGStore) Get(ctx context.Context, id string) (string, bool, error) {

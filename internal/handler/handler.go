@@ -222,15 +222,23 @@ func (h *Handler) saveWithRetries(ctx context.Context, original string, maxTry i
 		if err == nil {
 			return id, false, nil
 		}
+
 		if errors.Is(err, model.ErrCollision) {
 			continue
 		}
+
+		var dup *model.DuplicateURLError
+		if errors.As(err, &dup) {
+			return dup.ExistingID, true, nil
+		}
+
 		if errors.Is(err, model.ErrDuplicateOriginal) {
 			if existID, ok, e := h.store.FindByOriginal(ctx, original); e == nil && ok {
 				return existID, true, nil
 			}
 			return "", true, nil
 		}
+
 		return "", false, err
 	}
 	return "", false, model.ErrCollision
