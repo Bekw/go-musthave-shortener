@@ -3,8 +3,9 @@ package model
 import (
 	"context"
 	"database/sql"
-	"errors"
-	"time"
+
+	"github.com/jackc/pgconn"
+	"github.com/jackc/pgerrcode"
 )
 
 type PGStore struct {
@@ -15,37 +16,61 @@ func NewPGStore(db *sql.DB) *PGStore {
 	return &PGStore{db: db}
 }
 
-func (s *PGStore) Save(id, url string) error {
+func (s *PGStore) Save(ctx context.Context, id, url string) error {
 	const q = `
-		INSERT INTO urls (id, original_url)
-		VALUES ($1, $2)
-		ON CONFLICT (original_url)
-		DO UPDATE SET original_url = EXCLUDED.original_url
-		RETURNING id;
-	`
+INSERT INTO urls (id, original_url)
+VALUES ($1, $2)
+ON CONFLICT (id) DO NOTHING;`
 
-	var retID string
-	if err := s.db.QueryRowContext(context.Background(), q, id, url).Scan(&retID); err != nil {
+	res, err := s.db.ExecContext(ctx, q, id, url)
+	if err != nil {
+		if pgErr, ok := err.(*pgconn.PgError); ok && pgErr.Code == pgerrcode.UniqueViolation {
+			return ErrCollision
+		}
 		return err
 	}
-	if retID != id {
-		return &DuplicateURLError{ExistingID: retID}
+	aff, _ := res.RowsAffected()
+	if aff == 1 {
+		return nil
 	}
-	return nil
+
+	var existingID string
+	err = s.db.QueryRowContext(ctx,
+		`SELECT id FROM urls WHERE original_url = $1`, url,
+	).Scan(&existingID)
+	if err == nil {
+		return ErrDuplicateOriginal
+	}
+	if err == sql.ErrNoRows {
+		return ErrCollision
+	}
+	return err
 }
 
-func (s *PGStore) Get(id string) (string, bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-
-	var original string
+func (s *PGStore) Get(ctx context.Context, id string) (string, bool, error) {
+	var u string
 	err := s.db.QueryRowContext(ctx,
 		`SELECT original_url FROM urls WHERE id = $1`, id,
-	).Scan(&original)
-	if errors.Is(err, sql.ErrNoRows) || err != nil {
-		return "", false
+	).Scan(&u)
+	if err == sql.ErrNoRows {
+		return "", false, nil
 	}
-	return original, true
+	return u, err == nil, err
+}
+
+func (s *PGStore) FindByOriginal(ctx context.Context, url string) (string, bool, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id FROM urls WHERE original_url = $1`, url,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	return id, err == nil, err
+}
+
+func (s *PGStore) Ping(ctx context.Context) error {
+	return s.db.PingContext(ctx)
 }
 
 func EnsureSchema(ctx context.Context, db *sql.DB) error {
