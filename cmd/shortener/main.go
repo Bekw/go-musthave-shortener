@@ -69,6 +69,7 @@ func main() {
 	r.Post("/api/shorten", h.PostJSONHandler)
 	r.Post("/api/shorten/batch", h.PostBatchHandler)
 	r.Get("/api/user/urls", h.GetUserURLsHandler)
+	r.Delete("/api/user/urls", h.DeleteUserURLsHandler)
 	r.Get("/{id}", h.GetHandler)
 
 	logger.Info("server started", zap.String("addr", cfg.Address))

@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -53,13 +55,23 @@ func (s *PGStore) Save(ctx context.Context, id, url string) error {
 
 func (s *PGStore) Get(ctx context.Context, id string) (string, bool, error) {
 	var u string
+	var deleted bool
+
 	err := s.db.QueryRowContext(ctx,
-		`SELECT original_url FROM urls WHERE id = $1`, id,
-	).Scan(&u)
+		`SELECT original_url, is_deleted FROM urls WHERE id = $1`, id,
+	).Scan(&u, &deleted)
+
 	if err == sql.ErrNoRows {
 		return "", false, nil
 	}
-	return u, err == nil, err
+	if err != nil {
+		return "", false, err
+	}
+	if deleted {
+		return "", false, ErrDeleted
+	}
+
+	return u, true, nil
 }
 
 func (s *PGStore) FindByOriginal(ctx context.Context, url string) (string, bool, error) {
@@ -82,18 +94,56 @@ func EnsureSchema(ctx context.Context, db *sql.DB) error {
         CREATE TABLE IF NOT EXISTS urls (
             id           TEXT PRIMARY KEY,
             original_url TEXT NOT NULL,
-            created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+            created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+            is_deleted   BOOLEAN NOT NULL DEFAULT FALSE
         );
     `); err != nil {
 		return err
 	}
 
 	if _, err := db.ExecContext(ctx, `
-		CREATE UNIQUE INDEX IF NOT EXISTS urls_original_url_idx
-		ON urls (original_url);
-	`); err != nil {
+        ALTER TABLE urls
+        ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE;
+    `); err != nil {
+		return err
+	}
+
+	if _, err := db.ExecContext(ctx, `
+        CREATE UNIQUE INDEX IF NOT EXISTS urls_original_url_idx
+        ON urls (original_url);
+    `); err != nil {
 		return err
 	}
 
 	return nil
+}
+func (s *PGStore) MarkDeleted(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	uniq := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniq = append(uniq, id)
+	}
+
+	placeholders := make([]string, len(uniq))
+	args := make([]any, len(uniq))
+	for i, id := range uniq {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = id
+	}
+
+	query := fmt.Sprintf(
+		`UPDATE urls SET is_deleted = TRUE WHERE id IN (%s);`,
+		strings.Join(placeholders, ","),
+	)
+
+	_, err := s.db.ExecContext(ctx, query, args...)
+	return err
 }

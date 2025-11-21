@@ -76,7 +76,7 @@ func NewHandler(store model.Store, baseURL string, log *zap.Logger) *Handler {
 		baseURL: baseURL,
 		log:     log,
 
-		secretKey: []byte("very-secret-key"),
+		secretKey: []byte("lorem-ipsum"), // потом вынесу в env
 		mu:        &sync.RWMutex{},
 		userURLs:  make(map[string][]userURL),
 	}
@@ -186,6 +186,75 @@ func (h *Handler) getUserURLs(userID string) []userURL {
 	return urls
 }
 
+func (h *Handler) filterUserIDs(userID string, ids []string) []string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	urls := h.userURLs[userID]
+	if len(urls) == 0 {
+		return nil
+	}
+
+	owned := make(map[string]struct{}, len(urls))
+	for _, u := range urls {
+		parts := strings.Split(strings.TrimSpace(u.ShortURL), "/")
+		if len(parts) == 0 {
+			continue
+		}
+		id := parts[len(parts)-1]
+		owned[id] = struct{}{}
+	}
+
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := owned[id]; ok {
+			out = append(out, id)
+		}
+	}
+
+	return out
+}
+
+func (h *Handler) removeUserURLs(userID string, ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	toDelete := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		toDelete[id] = struct{}{}
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	urls := h.userURLs[userID]
+	if len(urls) == 0 {
+		return
+	}
+
+	filtered := urls[:0]
+	for _, u := range urls {
+		parts := strings.Split(strings.TrimSpace(u.ShortURL), "/")
+		if len(parts) == 0 {
+			continue
+		}
+		id := parts[len(parts)-1]
+		if _, needDelete := toDelete[id]; !needDelete {
+			filtered = append(filtered, u)
+		}
+	}
+
+	if len(filtered) == 0 {
+		delete(h.userURLs, userID)
+	} else {
+		h.userURLs[userID] = filtered
+	}
+}
+
 func (h *Handler) PostHandler(w http.ResponseWriter, r *http.Request) {
 	if ct := r.Header.Get("Content-Type"); ct != "text/plain" {
 		http.Error(w, "Content-Type must be text/plain", http.StatusBadRequest)
@@ -229,6 +298,10 @@ func (h *Handler) GetHandler(w http.ResponseWriter, r *http.Request) {
 
 	original, ok, err := h.store.Get(r.Context(), id)
 	if err != nil {
+		if errors.Is(err, model.ErrDeleted) {
+			w.WriteHeader(http.StatusGone)
+			return
+		}
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
@@ -411,4 +484,50 @@ func (h *Handler) GetUserURLsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(urls)
+}
+
+func (h *Handler) DeleteUserURLsHandler(w http.ResponseWriter, r *http.Request) {
+	userID, hasCookie, valid := h.readUserID(r)
+	if hasCookie && !valid {
+		http.Error(w, "invalid user cookie", http.StatusUnauthorized)
+		return
+	}
+
+	if !hasCookie || userID == "" {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		http.Error(w, "Content-Type must be application/json", http.StatusBadRequest)
+		return
+	}
+
+	var ids []string
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&ids); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if len(ids) == 0 {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	allowed := h.filterUserIDs(userID, ids)
+	if len(allowed) == 0 {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	if err := h.store.MarkDeleted(r.Context(), allowed); err != nil {
+		h.log.Error("mark deleted error", zap.Error(err))
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
+
+	h.removeUserURLs(userID, allowed)
+
+	w.WriteHeader(http.StatusAccepted)
 }
