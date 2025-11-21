@@ -2,6 +2,10 @@ package handler
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -9,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 
@@ -17,10 +22,21 @@ import (
 	"github.com/Bekw/go-musthave-shortener/internal/model"
 )
 
+const userCookieName = "user_id"
+
+type userURL struct {
+	ShortURL    string `json:"short_url"`
+	OriginalURL string `json:"original_url"`
+}
+
 type Handler struct {
 	store   model.Store
 	baseURL string
 	log     *zap.Logger
+
+	secretKey []byte
+	mu        *sync.RWMutex
+	userURLs  map[string][]userURL
 }
 
 type shortenRequest struct {
@@ -55,7 +71,119 @@ func NewHandler(store model.Store, baseURL string, log *zap.Logger) *Handler {
 	if log == nil {
 		log = zap.NewNop()
 	}
-	return &Handler{store: store, baseURL: baseURL, log: log}
+	return &Handler{
+		store:   store,
+		baseURL: baseURL,
+		log:     log,
+
+		secretKey: []byte("very-secret-key"),
+		mu:        &sync.RWMutex{},
+		userURLs:  make(map[string][]userURL),
+	}
+}
+
+func (h *Handler) newUserID() string {
+	return generateID() + generateID()
+}
+
+func (h *Handler) signUserID(id string) string {
+	mac := hmac.New(sha256.New, h.secretKey)
+	mac.Write([]byte(id))
+	sig := mac.Sum(nil)
+
+	payload := id + ":" + hex.EncodeToString(sig)
+	return base64.URLEncoding.EncodeToString([]byte(payload))
+}
+
+func (h *Handler) parseUserID(value string) (string, bool) {
+	data, err := base64.URLEncoding.DecodeString(value)
+	if err != nil {
+		return "", false
+	}
+
+	parts := strings.SplitN(string(data), ":", 2)
+	if len(parts) != 2 {
+		return "", false
+	}
+
+	id := parts[0]
+	sigBytes, err := hex.DecodeString(parts[1])
+	if err != nil {
+		return "", false
+	}
+
+	mac := hmac.New(sha256.New, h.secretKey)
+	mac.Write([]byte(id))
+	expected := mac.Sum(nil)
+
+	if !hmac.Equal(sigBytes, expected) {
+		return "", false
+	}
+
+	return id, true
+}
+
+func (h *Handler) readUserID(r *http.Request) (string, bool, bool) {
+	c, err := r.Cookie(userCookieName)
+	if err != nil {
+		if err == http.ErrNoCookie {
+			return "", false, false
+		}
+		return "", false, false
+	}
+
+	id, ok := h.parseUserID(c.Value)
+	if !ok || id == "" {
+		return "", true, false
+	}
+
+	return id, true, true
+}
+
+func (h *Handler) setUserCookie(w http.ResponseWriter, id string) {
+	val := h.signUserID(id)
+	http.SetCookie(w, &http.Cookie{
+		Name:     userCookieName,
+		Value:    val,
+		Path:     "/",
+		HttpOnly: true,
+	})
+}
+
+func (h *Handler) ensureUserID(w http.ResponseWriter, r *http.Request) string {
+	id, hasCookie, valid := h.readUserID(r)
+	if !hasCookie || !valid || id == "" {
+		id = h.newUserID()
+	}
+	if !hasCookie || !valid {
+		h.setUserCookie(w, id)
+	}
+	return id
+}
+
+func (h *Handler) addUserURL(userID, shortURL, original string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	urls := h.userURLs[userID]
+	for _, u := range urls {
+		if u.ShortURL == shortURL && u.OriginalURL == original {
+			return
+		}
+	}
+	h.userURLs[userID] = append(urls, userURL{
+		ShortURL:    shortURL,
+		OriginalURL: original,
+	})
+}
+
+func (h *Handler) getUserURLs(userID string) []userURL {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	urls := h.userURLs[userID]
+
+	return urls
 }
 
 func (h *Handler) PostHandler(w http.ResponseWriter, r *http.Request) {
@@ -70,6 +198,8 @@ func (h *Handler) PostHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	original := strings.TrimSpace(string(body))
 
+	userID := h.ensureUserID(w, r)
+
 	id, existed, err := h.saveWithRetries(r.Context(), original, 5)
 	if err != nil {
 		h.log.Error("store save error", zap.Error(err))
@@ -78,6 +208,9 @@ func (h *Handler) PostHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	shortURL, _ := url.JoinPath(h.baseURL, id)
+
+	h.addUserURL(userID, shortURL, original)
+
 	w.Header().Set("Content-Type", "text/plain")
 	if existed {
 		w.WriteHeader(http.StatusConflict)
@@ -117,40 +250,43 @@ func (h *Handler) PostJSONHandler(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		URL string `json:"url"`
 	}
+
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&in); err != nil || strings.TrimSpace(in.URL) == "" {
+	if err := dec.Decode(&in); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
 
-	const maxAttempts = 5
-	var id string
-	for try := 0; try < maxAttempts; try++ {
-		id = generateID()
-		if err := h.store.Save(r.Context(), id, in.URL); err != nil {
-			if errors.Is(err, model.ErrCollision) {
-				continue
-			}
-			var dup *model.DuplicateURLError
-			if errors.As(err, &dup) {
-				shortURL, _ := url.JoinPath(h.baseURL, dup.ExistingID)
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusConflict)
-				_ = json.NewEncoder(w).Encode(map[string]string{"result": shortURL})
-				return
-			}
-			http.Error(w, "storage error", http.StatusInternalServerError)
-			return
-		}
-		shortURL, _ := url.JoinPath(h.baseURL, id)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(map[string]string{"result": shortURL})
+	original := strings.TrimSpace(in.URL)
+	if original == "" {
+		http.Error(w, "empty url", http.StatusBadRequest)
 		return
 	}
 
-	http.Error(w, "cannot allocate id", http.StatusInternalServerError)
+	userID := h.ensureUserID(w, r)
+
+	id, existed, err := h.saveWithRetries(r.Context(), original, 5)
+	if err != nil {
+		h.log.Error("store save error", zap.Error(err))
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
+
+	shortURL, _ := url.JoinPath(h.baseURL, id)
+
+	h.addUserURL(userID, shortURL, original)
+
+	w.Header().Set("Content-Type", "application/json")
+	if existed {
+		w.WriteHeader(http.StatusConflict)
+	} else {
+		w.WriteHeader(http.StatusCreated)
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"result": shortURL,
+	})
 }
 
 func (h *Handler) PingHandler(w http.ResponseWriter, r *http.Request) {
@@ -179,6 +315,8 @@ func (h *Handler) PostBatchHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userID := h.ensureUserID(w, r)
+
 	out := make([]batchResItem, 0, len(in))
 
 	for _, it := range in {
@@ -204,8 +342,15 @@ func (h *Handler) PostBatchHandler(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
+
 			shortURL, _ := url.JoinPath(h.baseURL, id)
-			out = append(out, batchResItem{CorrelationID: it.CorrelationID, ShortURL: shortURL})
+
+			h.addUserURL(userID, shortURL, urlStr)
+
+			out = append(out, batchResItem{
+				CorrelationID: it.CorrelationID,
+				ShortURL:      shortURL,
+			})
 			break
 		}
 	}
@@ -242,4 +387,28 @@ func (h *Handler) saveWithRetries(ctx context.Context, original string, maxTry i
 		return "", false, err
 	}
 	return "", false, model.ErrCollision
+}
+
+func (h *Handler) GetUserURLsHandler(w http.ResponseWriter, r *http.Request) {
+	userID, hasCookie, valid := h.readUserID(r)
+
+	if hasCookie && !valid {
+		http.Error(w, "invalid user cookie", http.StatusUnauthorized)
+		return
+	}
+
+	if !hasCookie || userID == "" {
+		userID = h.newUserID()
+		h.setUserCookie(w, userID)
+	}
+
+	urls := h.getUserURLs(userID)
+	if len(urls) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(urls)
 }
