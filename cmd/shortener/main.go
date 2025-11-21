@@ -75,6 +75,7 @@ func main() {
 	r.Post("/api/shorten", h.PostJSONHandler)
 	r.Get("/{id}", h.GetHandler)
 	r.Get("/ping", h.PingHandler)
+	r.Post("/api/shorten/batch", h.PostBatchHandler)
 
 	log.Printf("Server running on %s", cfg.Address)
 	log.Fatal(http.ListenAndServe(cfg.Address, r))
