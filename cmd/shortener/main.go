@@ -37,19 +37,28 @@ func mustInitDB(dsn string, logger *zap.Logger) *sql.DB {
 func main() {
 	cfg := config.FromFlags()
 
+	logger, _ := zap.NewProduction()
+	defer logger.Sync()
+
 	var store model.Store
-	var err error
-	if cfg.FilePath != "" {
-		store, err = model.NewFileStore(cfg.FilePath)
+
+	if cfg.DatabaseDSN != "" {
+		db := mustInitDB(cfg.DatabaseDSN, logger)
+
+		if err := model.EnsureSchema(context.Background(), db); err != nil {
+			logger.Fatal("db ensure schema failed", zap.Error(err))
+		}
+
+		store = model.NewPGStore(db)
+	} else if cfg.FilePath != "" {
+		fs, err := model.NewFileStore(cfg.FilePath)
 		if err != nil {
 			log.Fatalf("init file store: %v", err)
 		}
+		store = fs
 	} else {
 		store = model.NewMemoryStore()
 	}
-
-	logger, _ := zap.NewProduction()
-	defer logger.Sync()
 
 	var db *sql.DB
 	if cfg.DatabaseDSN != "" {
