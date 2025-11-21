@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"log"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -17,66 +16,60 @@ import (
 	"github.com/Bekw/go-musthave-shortener/internal/model"
 )
 
-func mustInitDB(dsn string, logger *zap.Logger) *sql.DB {
+func mustInitDB(ctx context.Context, dsn string) *sql.DB {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
-		logger.Fatal("db open failed", zap.Error(err))
+		log.Fatalf("open db: %v", err)
 	}
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(30 * time.Minute)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
-		logger.Fatal("db initial ping failed", zap.Error(err))
+		log.Fatalf("db ping failed: %v", err)
 	}
+
+	if err := model.EnsureSchema(ctx, db); err != nil {
+		log.Fatalf("ensure schema failed: %v", err)
+	}
+
 	return db
 }
 
 func main() {
 	cfg := config.FromFlags()
-
 	logger, _ := zap.NewProduction()
 	defer logger.Sync()
 
+	ctx := context.Background()
+
 	var store model.Store
 
-	if cfg.DatabaseDSN != "" {
-		db := mustInitDB(cfg.DatabaseDSN, logger)
-
-		if err := model.EnsureSchema(context.Background(), db); err != nil {
-			logger.Fatal("db ensure schema failed", zap.Error(err))
-		}
-
+	switch {
+	case cfg.DatabaseDSN != "":
+		db := mustInitDB(ctx, cfg.DatabaseDSN)
 		store = model.NewPGStore(db)
-	} else if cfg.FilePath != "" {
+
+	case cfg.FilePath != "":
 		fs, err := model.NewFileStore(cfg.FilePath)
 		if err != nil {
-			log.Fatalf("init file store: %v", err)
+			logger.Fatal("init file store", zap.Error(err))
 		}
 		store = fs
-	} else {
+
+	default:
 		store = model.NewMemoryStore()
 	}
 
-	var db *sql.DB
-	if cfg.DatabaseDSN != "" {
-		db = mustInitDB(cfg.DatabaseDSN, logger)
-	}
 	h := handler.NewHandler(store, cfg.BaseURL, logger)
-	h.SetDB(db)
 
 	r := chi.NewRouter()
 	r.Use(appmw.Logger(logger))
 	r.Use(appmw.Gzip())
 
+	r.Get("/ping", h.PingHandler)
 	r.Post("/", h.PostHandler)
 	r.Post("/api/shorten", h.PostJSONHandler)
-	r.Get("/{id}", h.GetHandler)
-	r.Get("/ping", h.PingHandler)
 	r.Post("/api/shorten/batch", h.PostBatchHandler)
+	r.Get("/{id}", h.GetHandler)
 
-	log.Printf("Server running on %s", cfg.Address)
+	logger.Info("server started", zap.String("addr", cfg.Address))
 	log.Fatal(http.ListenAndServe(cfg.Address, r))
 }

@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -23,7 +21,6 @@ type Handler struct {
 	store   model.Store
 	baseURL string
 	log     *zap.Logger
-	db      *sql.DB
 }
 
 type shortenRequest struct {
@@ -61,64 +58,47 @@ func NewHandler(store model.Store, baseURL string, log *zap.Logger) *Handler {
 	return &Handler{store: store, baseURL: baseURL, log: log}
 }
 
-func (h *Handler) SetDB(db *sql.DB) {
-	h.db = db
-}
-
 func (h *Handler) PostHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("Content-Type") != "text/plain" {
+	if ct := r.Header.Get("Content-Type"); ct != "text/plain" {
 		http.Error(w, "Content-Type must be text/plain", http.StatusBadRequest)
 		return
 	}
-
 	body, err := io.ReadAll(r.Body)
 	if err != nil || len(body) == 0 {
 		http.Error(w, "empty body", http.StatusBadRequest)
 		return
 	}
-
 	original := strings.TrimSpace(string(body))
 
-	const maxAttempts = 5
-	var id string
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		id = generateID()
-		if err := h.store.Save(id, original); err != nil {
-			if errors.Is(err, model.ErrCollision) {
-				continue
-			}
-			h.log.Error("store save error: %v", zap.Error(err))
-			http.Error(w, "internal error", http.StatusBadRequest)
-			return
-		}
-		break
-	}
-	if id == "" {
-		http.Error(w, "cannot allocate id", http.StatusBadRequest)
-		return
-	}
-
-	shortURL, err := url.JoinPath(h.baseURL, id)
+	id, existed, err := h.saveWithRetries(r.Context(), original, 5)
 	if err != nil {
-		http.Error(w, "bad base url", http.StatusBadRequest)
+		h.log.Error("store save error", zap.Error(err))
+		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
 
+	shortURL, _ := url.JoinPath(h.baseURL, id)
 	w.Header().Set("Content-Type", "text/plain")
-	w.WriteHeader(http.StatusCreated)
-	if _, err := w.Write([]byte(shortURL)); err != nil {
-		h.log.Error("response error: %v", zap.Error(err))
+	if existed {
+		w.WriteHeader(http.StatusConflict)
+	} else {
+		w.WriteHeader(http.StatusCreated)
 	}
+	_, _ = w.Write([]byte(shortURL))
 }
 
 func (h *Handler) GetHandler(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if id == "" {
-		http.Error(w, "missing id", http.StatusBadRequest)
+		http.Error(w, "id is empty", http.StatusBadRequest)
 		return
 	}
 
-	original, ok := h.store.Get(id)
+	original, ok, err := h.store.Get(r.Context(), id)
+	if err != nil {
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
 	if !ok {
 		http.Error(w, "id not found", http.StatusBadRequest)
 		return
@@ -134,65 +114,53 @@ func (h *Handler) PostJSONHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req shortenRequest
-	body, err := io.ReadAll(r.Body)
-	if err != nil || len(body) == 0 {
-		http.Error(w, "empty body", http.StatusBadRequest)
-		return
+	var in struct {
+		URL string `json:"url"`
 	}
-	if err := json.Unmarshal(body, &req); err != nil || strings.TrimSpace(req.URL) == "" {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil || strings.TrimSpace(in.URL) == "" {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	original := strings.TrimSpace(req.URL)
 
 	const maxAttempts = 5
 	var id string
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for try := 0; try < maxAttempts; try++ {
 		id = generateID()
-		if err := h.store.Save(id, original); err != nil {
+		if err := h.store.Save(r.Context(), id, in.URL); err != nil {
 			if errors.Is(err, model.ErrCollision) {
 				continue
 			}
-
-			h.log.Error("store save error: %v", zap.Error(err))
-			http.Error(w, "internal error", http.StatusBadRequest)
+			var dup *model.DuplicateURLError
+			if errors.As(err, &dup) {
+				shortURL, _ := url.JoinPath(h.baseURL, dup.ExistingID)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]string{"result": shortURL})
+				return
+			}
+			http.Error(w, "storage error", http.StatusInternalServerError)
 			return
 		}
-		break
-	}
-	if id == "" {
-		http.Error(w, "cannot allocate id", http.StatusBadRequest)
+		shortURL, _ := url.JoinPath(h.baseURL, id)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{"result": shortURL})
 		return
 	}
 
-	shortURL, err := url.JoinPath(h.baseURL, id)
-	if err != nil {
-		http.Error(w, "bad base url", http.StatusBadRequest)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	if err := json.NewEncoder(w).Encode(shortenResponse{Result: shortURL}); err != nil {
-		h.log.Error("encoding error: %v", zap.Error(err))
-	}
+	http.Error(w, "cannot allocate id", http.StatusInternalServerError)
 }
 
 func (h *Handler) PingHandler(w http.ResponseWriter, r *http.Request) {
-	if h.db == nil {
+	if err := h.store.Ping(r.Context()); err != nil {
 		http.Error(w, "db is not configured", http.StatusInternalServerError)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 1*time.Second)
-	defer cancel()
-	if err := h.db.PingContext(ctx); err != nil {
-		h.log.Error("db ping failed", zap.Error(err))
-		http.Error(w, "db unavailable", http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
 }
+
 func (h *Handler) PostBatchHandler(w http.ResponseWriter, r *http.Request) {
 	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 		http.Error(w, "Content-Type must be application/json", http.StatusBadRequest)
@@ -221,31 +189,57 @@ func (h *Handler) PostBatchHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var id string
-		for {
+		const maxAttempts = 5
+		for try := 0; try < maxAttempts; try++ {
 			id = generateID()
-			if err := h.store.Save(id, urlStr); err != nil {
+			if err := h.store.Save(r.Context(), id, urlStr); err != nil {
 				if errors.Is(err, model.ErrCollision) {
 					continue
 				}
-				http.Error(w, "storage error", http.StatusInternalServerError)
-				return
+				var dup *model.DuplicateURLError
+				if errors.As(err, &dup) {
+					id = dup.ExistingID
+				} else {
+					http.Error(w, "storage error", http.StatusInternalServerError)
+					return
+				}
 			}
+			shortURL, _ := url.JoinPath(h.baseURL, id)
+			out = append(out, batchResItem{CorrelationID: it.CorrelationID, ShortURL: shortURL})
 			break
 		}
-
-		short, err := url.JoinPath(h.baseURL, id)
-		if err != nil {
-			http.Error(w, "bad base url", http.StatusBadRequest)
-			return
-		}
-
-		out = append(out, batchResItem{
-			CorrelationID: it.CorrelationID,
-			ShortURL:      short,
-		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+func (h *Handler) saveWithRetries(ctx context.Context, original string, maxTry int) (id string, existed bool, err error) {
+	for i := 0; i < maxTry; i++ {
+		id = generateID()
+		err = h.store.Save(ctx, id, original)
+		if err == nil {
+			return id, false, nil
+		}
+
+		if errors.Is(err, model.ErrCollision) {
+			continue
+		}
+
+		var dup *model.DuplicateURLError
+		if errors.As(err, &dup) {
+			return dup.ExistingID, true, nil
+		}
+
+		if errors.Is(err, model.ErrDuplicateOriginal) {
+			if existID, ok, e := h.store.FindByOriginal(ctx, original); e == nil && ok {
+				return existID, true, nil
+			}
+			return "", true, nil
+		}
+
+		return "", false, err
+	}
+	return "", false, model.ErrCollision
 }

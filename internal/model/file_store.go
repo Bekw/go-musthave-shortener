@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -23,24 +24,27 @@ func NewFileStore(path string) (Store, error) {
 		memoryStore: &memoryStore{
 			mu: new(sync.RWMutex),
 			mp: make(map[string]string),
+			ri: make(map[string]string),
 		},
 		path: path,
 	}
+
 	if err := fs.load(); err != nil {
-		return nil, fmt.Errorf("load storage %q: %w", path, err)
+		return nil, fmt.Errorf("load file store: %w", err)
 	}
+
 	return fs, nil
 }
 
-func (f *fileStore) Save(id, url string) error {
-	f.mu.Lock()
-	if _, ok := f.mp[id]; ok {
-		f.mu.Unlock()
-		return ErrCollision
+func (f *fileStore) Save(ctx context.Context, id, url string) error {
+	if err := f.memoryStore.Save(ctx, id, url); err != nil {
+		return err
 	}
-	f.mp[id] = url
-	f.mu.Unlock()
-	return f.flush()
+
+	if err := f.flush(); err != nil {
+		return fmt.Errorf("flush file store: %w", err)
+	}
+	return nil
 }
 
 func (f *fileStore) load() error {
