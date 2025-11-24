@@ -119,7 +119,7 @@ func EnsureSchema(ctx context.Context, db *sql.DB) error {
         CREATE TABLE IF NOT EXISTS user_urls (
             user_id TEXT NOT NULL,
             url_id  TEXT NOT NULL,
-            PRIMARY KEY (user_id, url_id),
+            PRIMARY KEY (user_id, url_id)
         );
     `); err != nil {
 		return err
