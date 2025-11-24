@@ -120,7 +120,6 @@ func EnsureSchema(ctx context.Context, db *sql.DB) error {
             user_id TEXT NOT NULL,
             url_id  TEXT NOT NULL,
             PRIMARY KEY (user_id, url_id),
-            FOREIGN KEY (url_id) REFERENCES urls(id)
         );
     `); err != nil {
 		return err
