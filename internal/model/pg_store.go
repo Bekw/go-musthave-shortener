@@ -115,8 +115,27 @@ func EnsureSchema(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 
+	if _, err := db.ExecContext(ctx, `
+        CREATE TABLE IF NOT EXISTS user_urls (
+            user_id TEXT NOT NULL,
+            url_id  TEXT NOT NULL,
+            PRIMARY KEY (user_id, url_id),
+            FOREIGN KEY (url_id) REFERENCES urls(id)
+        );
+    `); err != nil {
+		return err
+	}
+
+	if _, err := db.ExecContext(ctx, `
+        CREATE INDEX IF NOT EXISTS idx_user_urls_user_id
+        ON user_urls(user_id);
+    `); err != nil {
+		return err
+	}
+
 	return nil
 }
+
 func (s *PGStore) MarkDeleted(ctx context.Context, ids []string) error {
 	if len(ids) == 0 {
 		return nil
@@ -143,6 +162,80 @@ func (s *PGStore) MarkDeleted(ctx context.Context, ids []string) error {
 		`UPDATE urls SET is_deleted = TRUE WHERE id IN (%s);`,
 		strings.Join(placeholders, ","),
 	)
+
+	_, err := s.db.ExecContext(ctx, query, args...)
+	return err
+}
+
+func (s *PGStore) AddUserURL(ctx context.Context, userID, urlID string) error {
+	_, err := s.db.ExecContext(ctx, `
+        INSERT INTO user_urls (user_id, url_id)
+        VALUES ($1, $2)
+        ON CONFLICT DO NOTHING;
+    `, userID, urlID)
+	return err
+}
+
+func (s *PGStore) GetUserURLs(ctx context.Context, userID string) ([]UserURL, error) {
+	rows, err := s.db.QueryContext(ctx, `
+        SELECT u.id, u.original_url
+        FROM urls u
+        JOIN user_urls uu ON uu.url_id = u.id
+        WHERE uu.user_id = $1
+          AND u.is_deleted = FALSE;
+    `, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []UserURL
+	for rows.Next() {
+		var u UserURL
+		if err := rows.Scan(&u.ID, &u.OriginalURL); err != nil {
+			return nil, err
+		}
+		result = append(result, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (s *PGStore) DeleteUserURLs(ctx context.Context, userID string, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	uniq := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniq = append(uniq, id)
+	}
+
+	placeholders := make([]string, len(uniq))
+	args := make([]any, 0, len(uniq)+1)
+	args = append(args, userID)
+
+	for i, id := range uniq {
+		placeholders[i] = fmt.Sprintf("$%d", i+2)
+		args = append(args, id)
+	}
+
+	query := fmt.Sprintf(`
+        UPDATE urls
+           SET is_deleted = TRUE
+         WHERE id IN (
+             SELECT url_id
+               FROM user_urls
+              WHERE user_id = $1
+                AND url_id IN (%s)
+         );
+    `, strings.Join(placeholders, ","))
 
 	_, err := s.db.ExecContext(ctx, query, args...)
 	return err

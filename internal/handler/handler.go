@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 
 	"github.com/go-chi/chi/v5"
 
@@ -29,14 +28,18 @@ type userURL struct {
 	OriginalURL string `json:"original_url"`
 }
 
+type deleteTask struct {
+	userID string
+	ids    []string
+}
+
 type Handler struct {
 	store   model.Store
 	baseURL string
 	log     *zap.Logger
 
 	secretKey []byte
-	mu        *sync.RWMutex
-	userURLs  map[string][]userURL
+	deleteCh  chan deleteTask
 }
 
 type shortenRequest struct {
@@ -71,14 +74,34 @@ func NewHandler(store model.Store, baseURL string, log *zap.Logger) *Handler {
 	if log == nil {
 		log = zap.NewNop()
 	}
-	return &Handler{
-		store:   store,
-		baseURL: baseURL,
-		log:     log,
+	h := &Handler{
+		store:     store,
+		baseURL:   baseURL,
+		log:       log,
+		secretKey: []byte("very-secret-key"),
+		deleteCh:  make(chan deleteTask, 128),
+	}
 
-		secretKey: []byte("lorem-ipsum"), // потом вынесу в env
-		mu:        &sync.RWMutex{},
-		userURLs:  make(map[string][]userURL),
+	go h.deleteWorker(context.Background())
+
+	return h
+}
+
+func (h *Handler) deleteWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case task := <-h.deleteCh:
+			if len(task.ids) == 0 {
+				continue
+			}
+
+			if err := h.store.DeleteUserURLs(context.Background(), task.userID, task.ids); err != nil {
+				h.log.Error("async delete failed", zap.Error(err))
+				continue
+			}
+		}
 	}
 }
 
@@ -161,100 +184,6 @@ func (h *Handler) ensureUserID(w http.ResponseWriter, r *http.Request) string {
 	return id
 }
 
-func (h *Handler) addUserURL(userID, shortURL, original string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	urls := h.userURLs[userID]
-	for _, u := range urls {
-		if u.ShortURL == shortURL && u.OriginalURL == original {
-			return
-		}
-	}
-	h.userURLs[userID] = append(urls, userURL{
-		ShortURL:    shortURL,
-		OriginalURL: original,
-	})
-}
-
-func (h *Handler) getUserURLs(userID string) []userURL {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	urls := h.userURLs[userID]
-
-	return urls
-}
-
-func (h *Handler) filterUserIDs(userID string, ids []string) []string {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	urls := h.userURLs[userID]
-	if len(urls) == 0 {
-		return nil
-	}
-
-	owned := make(map[string]struct{}, len(urls))
-	for _, u := range urls {
-		parts := strings.Split(strings.TrimSpace(u.ShortURL), "/")
-		if len(parts) == 0 {
-			continue
-		}
-		id := parts[len(parts)-1]
-		owned[id] = struct{}{}
-	}
-
-	out := make([]string, 0, len(ids))
-	for _, id := range ids {
-		id = strings.TrimSpace(id)
-		if id == "" {
-			continue
-		}
-		if _, ok := owned[id]; ok {
-			out = append(out, id)
-		}
-	}
-
-	return out
-}
-
-func (h *Handler) removeUserURLs(userID string, ids []string) {
-	if len(ids) == 0 {
-		return
-	}
-	toDelete := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		toDelete[id] = struct{}{}
-	}
-
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	urls := h.userURLs[userID]
-	if len(urls) == 0 {
-		return
-	}
-
-	filtered := urls[:0]
-	for _, u := range urls {
-		parts := strings.Split(strings.TrimSpace(u.ShortURL), "/")
-		if len(parts) == 0 {
-			continue
-		}
-		id := parts[len(parts)-1]
-		if _, needDelete := toDelete[id]; !needDelete {
-			filtered = append(filtered, u)
-		}
-	}
-
-	if len(filtered) == 0 {
-		delete(h.userURLs, userID)
-	} else {
-		h.userURLs[userID] = filtered
-	}
-}
-
 func (h *Handler) PostHandler(w http.ResponseWriter, r *http.Request) {
 	if ct := r.Header.Get("Content-Type"); ct != "text/plain" {
 		http.Error(w, "Content-Type must be text/plain", http.StatusBadRequest)
@@ -278,7 +207,11 @@ func (h *Handler) PostHandler(w http.ResponseWriter, r *http.Request) {
 
 	shortURL, _ := url.JoinPath(h.baseURL, id)
 
-	h.addUserURL(userID, shortURL, original)
+	if err := h.store.AddUserURL(r.Context(), userID, id); err != nil {
+		h.log.Error("add user url", zap.Error(err))
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "text/plain")
 	if existed {
@@ -348,7 +281,11 @@ func (h *Handler) PostJSONHandler(w http.ResponseWriter, r *http.Request) {
 
 	shortURL, _ := url.JoinPath(h.baseURL, id)
 
-	h.addUserURL(userID, shortURL, original)
+	if err := h.store.AddUserURL(r.Context(), userID, id); err != nil {
+		h.log.Error("add user url", zap.Error(err))
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	if existed {
@@ -418,7 +355,11 @@ func (h *Handler) PostBatchHandler(w http.ResponseWriter, r *http.Request) {
 
 			shortURL, _ := url.JoinPath(h.baseURL, id)
 
-			h.addUserURL(userID, shortURL, urlStr)
+			if err := h.store.AddUserURL(r.Context(), userID, id); err != nil {
+				h.log.Error("add user url", zap.Error(err))
+				http.Error(w, "storage error", http.StatusInternalServerError)
+				return
+			}
 
 			out = append(out, batchResItem{
 				CorrelationID: it.CorrelationID,
@@ -473,17 +414,39 @@ func (h *Handler) GetUserURLsHandler(w http.ResponseWriter, r *http.Request) {
 	if !hasCookie || userID == "" {
 		userID = h.newUserID()
 		h.setUserCookie(w, userID)
-	}
-
-	urls := h.getUserURLs(userID)
-	if len(urls) == 0 {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
+	items, err := h.store.GetUserURLs(r.Context(), userID)
+	if err != nil {
+		h.log.Error("get user urls error", zap.Error(err))
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
+
+	if len(items) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	type respItem struct {
+		ShortURL    string `json:"short_url"`
+		OriginalURL string `json:"original_url"`
+	}
+
+	out := make([]respItem, 0, len(items))
+	for _, it := range items {
+		short, _ := url.JoinPath(h.baseURL, it.ID)
+		out = append(out, respItem{
+			ShortURL:    short,
+			OriginalURL: it.OriginalURL,
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(urls)
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 func (h *Handler) DeleteUserURLsHandler(w http.ResponseWriter, r *http.Request) {
@@ -510,24 +473,25 @@ func (h *Handler) DeleteUserURLsHandler(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
+
 	if len(ids) == 0 {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 
-	allowed := h.filterUserIDs(userID, ids)
-	if len(allowed) == 0 {
-		w.WriteHeader(http.StatusAccepted)
-		return
+	task := deleteTask{
+		userID: userID,
+		ids:    append([]string(nil), ids...),
 	}
 
-	if err := h.store.MarkDeleted(r.Context(), allowed); err != nil {
-		h.log.Error("mark deleted error", zap.Error(err))
-		http.Error(w, "storage error", http.StatusInternalServerError)
-		return
+	select {
+	case h.deleteCh <- task:
+	default:
+		h.log.Warn("delete queue is full, dropping task",
+			zap.String("userID", userID),
+			zap.Int("ids_count", len(task.ids)),
+		)
 	}
-
-	h.removeUserURLs(userID, allowed)
 
 	w.WriteHeader(http.StatusAccepted)
 }
