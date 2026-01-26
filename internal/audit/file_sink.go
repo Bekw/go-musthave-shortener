@@ -12,7 +12,7 @@ type FileSink struct {
 	mu   sync.Mutex
 }
 
-func NewFileSink(path string) *FileSink {
+func NewFileSink(path string) Sink {
 	if path == "" {
 		return nil
 	}

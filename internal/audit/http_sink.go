@@ -14,7 +14,7 @@ type HTTPSink struct {
 	client *http.Client
 }
 
-func NewHTTPSink(url string, c *http.Client) *HTTPSink {
+func NewHTTPSink(url string, c *http.Client) Sink {
 	if url == "" {
 		return nil
 	}
