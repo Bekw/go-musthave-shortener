@@ -17,6 +17,7 @@ type UserURL struct {
 	OriginalURL string
 }
 
+// Store defines operations required by the shortener storage layer.
 type Store interface {
 	Save(ctx context.Context, id, url string) error
 	Get(ctx context.Context, id string) (string, bool, error)
@@ -111,6 +112,7 @@ func (m *memoryStore) MarkDeleted(ctx context.Context, ids []string) error {
 	}
 	return nil
 }
+
 func (m *memoryStore) AddUserURL(ctx context.Context, userID, urlID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

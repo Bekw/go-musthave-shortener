@@ -35,6 +35,7 @@ type deleteTask struct {
 	ids    []string
 }
 
+// Handler provides HTTP handlers for the URL shortener service.
 type Handler struct {
 	store   model.Store
 	baseURL string
@@ -73,6 +74,7 @@ func generateID() string {
 	return string(b)
 }
 
+// NewHandler constructs a Handler with the given storage and base URL.
 func NewHandler(store model.Store, baseURL string, log *zap.Logger) *Handler {
 	if log == nil {
 		log = zap.NewNop()
@@ -200,6 +202,7 @@ func (h *Handler) ensureUserID(w http.ResponseWriter, r *http.Request) string {
 	return id
 }
 
+// PostHandler handles POST / with text/plain body (original URL) and returns a short URL.
 func (h *Handler) PostHandler(w http.ResponseWriter, r *http.Request) {
 	if ct := r.Header.Get("Content-Type"); ct != "text/plain" {
 		http.Error(w, "Content-Type must be text/plain", http.StatusBadRequest)
@@ -245,6 +248,7 @@ func (h *Handler) PostHandler(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(shortURL))
 }
 
+// GetHandler handles GET /{id} and redirects to the original URL.
 func (h *Handler) GetHandler(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if id == "" {
@@ -280,6 +284,7 @@ func (h *Handler) GetHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusTemporaryRedirect)
 }
 
+// PostJSONHandler handles POST /api/shorten with JSON body and returns JSON response.
 func (h *Handler) PostJSONHandler(w http.ResponseWriter, r *http.Request) {
 	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 		http.Error(w, "Content-Type must be application/json", http.StatusBadRequest)

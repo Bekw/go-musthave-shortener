@@ -6,8 +6,11 @@ import (
 )
 
 const (
-	DefaultAddress  = "localhost:8080"
-	DefaultBaseURL  = "http://localhost:8080"
+	// DefaultAddress is the default HTTP server address.
+	DefaultAddress = "localhost:8080"
+	// DefaultBaseURL is the default base URL used to build short links.
+	DefaultBaseURL = "http://localhost:8080"
+	// DefaultFilePath is the default path to the JSON storage file.
 	DefaultFilePath = "storage.json"
 
 	envServerAddr  = "SERVER_ADDRESS"
@@ -19,6 +22,7 @@ const (
 	envAuditURL  = "AUDIT_URL"
 )
 
+// Config holds runtime configuration for the shortener server.
 type Config struct {
 	Address     string
 	BaseURL     string
@@ -29,6 +33,7 @@ type Config struct {
 	AuditURL  string
 }
 
+// NewConfig builds Config from flag values overridden by environment variables.
 func NewConfig(flagAddr, flagBase, flagFile string) *Config {
 	addr := flagAddr
 	base := flagBase
@@ -71,6 +76,7 @@ func NewConfig(flagAddr, flagBase, flagFile string) *Config {
 	return cfg
 }
 
+// FromFlags parses command-line flags and environment variables and returns Config.
 func FromFlags() *Config {
 	addrFlag := flag.String("a", DefaultAddress, "HTTP server address")
 	baseFlag := flag.String("b", DefaultBaseURL, "Base URL for short links")

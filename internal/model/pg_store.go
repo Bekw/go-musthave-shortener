@@ -11,10 +11,12 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+// PGStore implements Store backed by PostgreSQL.
 type PGStore struct {
 	db *sql.DB
 }
 
+// NewPGStore creates a PGStore instance using the provided database connection.
 func NewPGStore(db *sql.DB) *PGStore {
 	return &PGStore{db: db}
 }
@@ -89,6 +91,7 @@ func (s *PGStore) Ping(ctx context.Context) error {
 	return s.db.PingContext(ctx)
 }
 
+// EnsureSchema creates required database tables and indexes if they do not exist.
 func EnsureSchema(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, `
         CREATE TABLE IF NOT EXISTS urls (
