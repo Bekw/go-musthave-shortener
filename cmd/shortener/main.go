@@ -10,6 +10,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"go.uber.org/zap"
 
+	"github.com/Bekw/go-musthave-shortener/internal/audit"
 	"github.com/Bekw/go-musthave-shortener/internal/config"
 	"github.com/Bekw/go-musthave-shortener/internal/handler"
 	appmw "github.com/Bekw/go-musthave-shortener/internal/middleware"
@@ -58,7 +59,12 @@ func main() {
 		store = model.NewMemoryStore()
 	}
 
+	aud := audit.New()
+	aud.Add(audit.NewFileSink(cfg.AuditFile))
+	aud.Add(audit.NewHTTPSink(cfg.AuditURL, nil))
+
 	h := handler.NewHandler(store, cfg.BaseURL, logger)
+	h.SetAuditor(aud)
 
 	r := chi.NewRouter()
 	r.Use(appmw.Logger(logger))
