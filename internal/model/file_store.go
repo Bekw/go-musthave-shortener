@@ -12,6 +12,7 @@ import (
 type fileRecord struct {
 	ID       string `json:"id"`
 	Original string `json:"original_url"`
+	Deleted  bool   `json:"is_deleted"`
 }
 
 type fileStore struct {
@@ -22,9 +23,10 @@ type fileStore struct {
 func NewFileStore(path string) (Store, error) {
 	fs := &fileStore{
 		memoryStore: &memoryStore{
-			mu: new(sync.RWMutex),
-			mp: make(map[string]string),
-			ri: make(map[string]string),
+			mu:      new(sync.RWMutex),
+			mp:      make(map[string]string),
+			ri:      make(map[string]string),
+			deleted: make(map[string]bool),
 		},
 		path: path,
 	}
@@ -69,6 +71,10 @@ func (f *fileStore) load() error {
 	f.mu.Lock()
 	for _, it := range items {
 		f.mp[it.ID] = it.Original
+		if f.deleted == nil {
+			f.deleted = make(map[string]bool)
+		}
+		f.deleted[it.ID] = it.Deleted
 	}
 	f.mu.Unlock()
 	return nil
@@ -78,7 +84,15 @@ func (f *fileStore) flush() error {
 	f.mu.RLock()
 	items := make([]fileRecord, 0, len(f.mp))
 	for id, orig := range f.mp {
-		items = append(items, fileRecord{ID: id, Original: orig})
+		deleted := false
+		if f.deleted != nil {
+			deleted = f.deleted[id]
+		}
+		items = append(items, fileRecord{
+			ID:       id,
+			Original: orig,
+			Deleted:  deleted,
+		})
 	}
 	f.mu.RUnlock()
 
@@ -92,6 +106,15 @@ func (f *fileStore) flush() error {
 	}
 	if err := os.Rename(tmp, f.path); err != nil {
 		return fmt.Errorf("rename to %q: %w", f.path, err)
+	}
+	return nil
+}
+func (f *fileStore) MarkDeleted(ctx context.Context, ids []string) error {
+	if err := f.memoryStore.MarkDeleted(ctx, ids); err != nil {
+		return err
+	}
+	if err := f.flush(); err != nil {
+		return fmt.Errorf("flush file store: %w", err)
 	}
 	return nil
 }
