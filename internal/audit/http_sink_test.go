@@ -26,13 +26,13 @@ func TestHTTPSink_POSTsJSON(t *testing.T) {
 	defer srv.Close()
 
 	s := NewHTTPSink(srv.URL, srv.Client())
-	e := Event{Ts: 2, Action: "follow", UserID: "u2", URL: "https://ya.ru"}
+	e := Event{TS: 2, Action: "follow", UserID: "u2", URL: "https://ya.ru"}
 
 	if err := s.Write(context.Background(), e); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
-	if got.Ts != e.Ts || got.Action != e.Action || got.UserID != e.UserID || got.URL != e.URL {
+	if got.TS != e.TS || got.Action != e.Action || got.UserID != e.UserID || got.URL != e.URL {
 		t.Fatalf("unexpected event: %#v", got)
 	}
 }

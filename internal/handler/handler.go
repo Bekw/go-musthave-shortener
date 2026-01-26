@@ -217,7 +217,7 @@ func (h *Handler) PostHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.publish(r.Context(), audit.Event{
-		Ts:     time.Now().Unix(),
+		TS:     time.Now().Unix(),
 		Action: "shorten",
 		UserID: userID,
 		URL:    original,
@@ -257,7 +257,7 @@ func (h *Handler) GetHandler(w http.ResponseWriter, r *http.Request) {
 		uid = userID
 	}
 	h.publish(r.Context(), audit.Event{
-		Ts:     time.Now().Unix(),
+		TS:     time.Now().Unix(),
 		Action: "follow",
 		UserID: uid,
 		URL:    original,
@@ -308,7 +308,7 @@ func (h *Handler) PostJSONHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.publish(r.Context(), audit.Event{
-		Ts:     time.Now().Unix(),
+		TS:     time.Now().Unix(),
 		Action: "shorten",
 		UserID: userID,
 		URL:    original,

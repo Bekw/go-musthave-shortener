@@ -18,7 +18,7 @@ func TestFileSink_AppendsJSONLine(t *testing.T) {
 		t.Fatal("sink is nil")
 	}
 
-	e := Event{Ts: 1, Action: "shorten", UserID: "u1", URL: "https://example.com"}
+	e := Event{TS: 1, Action: "shorten", UserID: "u1", URL: "https://example.com"}
 	if err := s.Write(context.Background(), e); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestFileSink_AppendsJSONLine(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	if got.Ts != e.Ts || got.Action != e.Action || got.UserID != e.UserID || got.URL != e.URL {
+	if got.TS != e.TS || got.Action != e.Action || got.UserID != e.UserID || got.URL != e.URL {
 		t.Fatalf("unexpected event: %#v", got)
 	}
 }
