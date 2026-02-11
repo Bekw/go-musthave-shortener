@@ -242,6 +242,16 @@ func (h *Handler) GetHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id not found", http.StatusBadRequest)
 		return
 	}
+	uid := ""
+	if userID, has, valid := h.readUserID(r); has && valid {
+		uid = userID
+	}
+	h.publish(r.Context(), audit.Event{
+		TS:     time.Now().Unix(),
+		Action: "follow",
+		UserID: uid,
+		URL:    original,
+	})
 
 	uid := ""
 	if userID, has, valid := h.readUserID(r); has && valid {
