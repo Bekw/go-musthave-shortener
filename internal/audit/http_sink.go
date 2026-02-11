@@ -1,49 +1,46 @@
 package audit
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
-	"net/http"
 	"time"
+
+	"github.com/go-resty/resty/v2"
 )
 
 type HTTPSink struct {
+	client *resty.Client
 	url    string
-	client *http.Client
 }
 
-func NewHTTPSink(url string, c *http.Client) Sink {
+func NewHTTPSink(url string, client *resty.Client) *HTTPSink {
 	if url == "" {
 		return nil
 	}
-	if c == nil {
-		c = &http.Client{Timeout: 2 * time.Second}
+
+	if client == nil {
+		client = resty.New().
+			SetTimeout(5 * time.Second).
+			SetRetryCount(3).
+			SetRetryWaitTime(1 * time.Second).
+			SetRetryMaxWaitTime(5 * time.Second)
 	}
-	return &HTTPSink{url: url, client: c}
+
+	return &HTTPSink{
+		client: client,
+		url:    url,
+	}
 }
 
 func (s *HTTPSink) Write(ctx context.Context, e Event) error {
-	b, err := json.Marshal(e)
-	if err != nil {
-		return err
+	if s == nil || s.url == "" {
+		return nil
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.url, bytes.NewReader(b))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
+	_, err := s.client.R().
+		SetContext(ctx).
+		SetHeader("Content-Type", "application/json").
+		SetBody(e).
+		Post(s.url)
 
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("audit receiver status %d", resp.StatusCode)
-	}
-	return nil
+	return err
 }

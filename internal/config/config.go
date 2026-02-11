@@ -2,7 +2,8 @@ package config
 
 import (
 	"flag"
-	"os"
+
+	"github.com/ilyakaznacheev/cleanenv"
 )
 
 const (
@@ -12,72 +13,22 @@ const (
 	DefaultBaseURL = "http://localhost:8080"
 	// DefaultFilePath is the default path to the JSON storage file.
 	DefaultFilePath = "storage.json"
-
-	envServerAddr  = "SERVER_ADDRESS"
-	envBaseURL     = "BASE_URL"
-	envFilePath    = "FILE_STORAGE_PATH"
-	envDatabaseDSN = "DATABASE_DSN"
-
-	envAuditFile = "AUDIT_FILE"
-	envAuditURL  = "AUDIT_URL"
 )
 
 // Config holds runtime configuration for the shortener server.
 type Config struct {
-	Address     string
-	BaseURL     string
-	FilePath    string
-	DatabaseDSN string
-
-	AuditFile string
-	AuditURL  string
-}
-
-// NewConfig builds Config from flag values overridden by environment variables.
-func NewConfig(flagAddr, flagBase, flagFile string) *Config {
-	addr := flagAddr
-	base := flagBase
-	file := flagFile
-
-	if addr == "" {
-		addr = DefaultAddress
-	}
-	if base == "" {
-		base = DefaultBaseURL
-	}
-	if file == "" {
-		file = DefaultFilePath
-	}
-
-	if v, ok := os.LookupEnv(envServerAddr); ok {
-		addr = v
-	}
-	if v, ok := os.LookupEnv(envBaseURL); ok {
-		base = v
-	}
-	if v, ok := os.LookupEnv(envFilePath); ok {
-		file = v
-	}
-
-	cfg := &Config{
-		Address:  addr,
-		BaseURL:  base,
-		FilePath: file,
-	}
-	if v, ok := os.LookupEnv(envAuditFile); ok {
-		cfg.AuditFile = v
-	}
-	if v, ok := os.LookupEnv(envAuditURL); ok {
-		cfg.AuditURL = v
-	}
-	if v, ok := os.LookupEnv(envDatabaseDSN); ok {
-		cfg.DatabaseDSN = v
-	}
-	return cfg
+	Address     string `env:"SERVER_ADDRESS" env-default:"localhost:8080"`
+	BaseURL     string `env:"BASE_URL" env-default:"http://localhost:8080"`
+	FilePath    string `env:"FILE_STORAGE_PATH" env-default:"storage.json"`
+	DatabaseDSN string `env:"DATABASE_DSN"`
+	AuditFile   string `env:"AUDIT_FILE"`
+	AuditURL    string `env:"AUDIT_URL"`
 }
 
 // FromFlags parses command-line flags and environment variables and returns Config.
 func FromFlags() *Config {
+	var cfg Config
+
 	addrFlag := flag.String("a", DefaultAddress, "HTTP server address")
 	baseFlag := flag.String("b", DefaultBaseURL, "Base URL for short links")
 	fileFlag := flag.String("f", DefaultFilePath, "Path to JSON storage file")
@@ -86,15 +37,57 @@ func FromFlags() *Config {
 	auditURLFlag := flag.String("audit-url", "", "Remote audit receiver URL")
 	flag.Parse()
 
-	cfg := NewConfig(*addrFlag, *baseFlag, *fileFlag)
-	if _, ok := os.LookupEnv(envDatabaseDSN); !ok {
+	if err := cleanenv.ReadEnv(&cfg); err != nil {
+		cfg = Config{
+			Address:  DefaultAddress,
+			BaseURL:  DefaultBaseURL,
+			FilePath: DefaultFilePath,
+		}
+	}
+
+	if cfg.Address == DefaultAddress && *addrFlag != DefaultAddress {
+		cfg.Address = *addrFlag
+	}
+	if cfg.BaseURL == DefaultBaseURL && *baseFlag != DefaultBaseURL {
+		cfg.BaseURL = *baseFlag
+	}
+	if cfg.FilePath == DefaultFilePath && *fileFlag != DefaultFilePath {
+		cfg.FilePath = *fileFlag
+	}
+
+	if cfg.DatabaseDSN == "" {
 		cfg.DatabaseDSN = *dsnFlag
 	}
-	if _, ok := os.LookupEnv(envAuditFile); !ok {
+	if cfg.AuditFile == "" {
 		cfg.AuditFile = *auditFileFlag
 	}
-	if _, ok := os.LookupEnv(envAuditURL); !ok {
+	if cfg.AuditURL == "" {
 		cfg.AuditURL = *auditURLFlag
 	}
-	return cfg
+
+	return &cfg
+}
+
+func NewConfig(flagAddr, flagBase, flagFile string) *Config {
+	var cfg Config
+
+	if err := cleanenv.ReadEnv(&cfg); err != nil {
+		cfg = Config{
+			Address:  DefaultAddress,
+			BaseURL:  DefaultBaseURL,
+			FilePath: DefaultFilePath,
+		}
+	}
+
+	if cfg.Address == DefaultAddress && flagAddr != "" {
+		cfg.Address = flagAddr
+	}
+	if cfg.BaseURL == DefaultBaseURL && flagBase != "" {
+		cfg.BaseURL = flagBase
+	}
+	if cfg.FilePath == DefaultFilePath && flagFile != "" {
+		cfg.FilePath = flagFile
+	}
+
+	return &cfg
 }

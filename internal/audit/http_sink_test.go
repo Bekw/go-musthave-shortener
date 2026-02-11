@@ -25,7 +25,7 @@ func TestHTTPSink_POSTsJSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := NewHTTPSink(srv.URL, srv.Client())
+	s := NewHTTPSink(srv.URL, nil)
 	e := Event{TS: 2, Action: "follow", UserID: "u2", URL: "https://ya.ru"}
 
 	if err := s.Write(context.Background(), e); err != nil {

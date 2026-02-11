@@ -47,6 +47,7 @@ func main() {
 	case cfg.DatabaseDSN != "":
 		db := mustInitDB(ctx, cfg.DatabaseDSN)
 		store = model.NewPGStore(db)
+		logger.Info("using PostgreSQL storage", zap.String("dsn", cfg.DatabaseDSN))
 
 	case cfg.FilePath != "":
 		fs, err := model.NewFileStore(cfg.FilePath)
@@ -54,14 +55,22 @@ func main() {
 			logger.Fatal("init file store", zap.Error(err))
 		}
 		store = fs
+		logger.Info("using file storage", zap.String("path", cfg.FilePath))
 
 	default:
 		store = model.NewMemoryStore()
+		logger.Info("using in-memory storage")
 	}
 
 	aud := audit.New()
-	aud.Add(audit.NewFileSink(cfg.AuditFile))
-	aud.Add(audit.NewHTTPSink(cfg.AuditURL, nil))
+	if cfg.AuditFile != "" {
+		aud.Add(audit.NewFileSink(cfg.AuditFile))
+		logger.Info("audit file sink enabled", zap.String("file", cfg.AuditFile))
+	}
+	if cfg.AuditURL != "" {
+		aud.Add(audit.NewHTTPSink(cfg.AuditURL, nil))
+		logger.Info("audit HTTP sink enabled", zap.String("url", cfg.AuditURL))
+	}
 
 	h := handler.NewHandler(store, cfg.BaseURL, logger)
 	h.SetAuditor(aud)

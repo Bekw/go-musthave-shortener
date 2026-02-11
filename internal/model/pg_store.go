@@ -169,6 +169,7 @@ func (s *PGStore) MarkDeleted(ctx context.Context, ids []string) error {
 	return err
 }
 
+// AddUserURL associates a URL with a user.
 func (s *PGStore) AddUserURL(ctx context.Context, userID, urlID string) error {
 	_, err := s.db.ExecContext(ctx, `
         INSERT INTO user_urls (user_id, url_id)
@@ -178,6 +179,7 @@ func (s *PGStore) AddUserURL(ctx context.Context, userID, urlID string) error {
 	return err
 }
 
+// GetUserURLs retrieves all non-deleted URLs for a given user.
 func (s *PGStore) GetUserURLs(ctx context.Context, userID string) ([]UserURL, error) {
 	rows, err := s.db.QueryContext(ctx, `
         SELECT u.id, u.original_url
@@ -205,6 +207,8 @@ func (s *PGStore) GetUserURLs(ctx context.Context, userID string) ([]UserURL, er
 	return result, nil
 }
 
+// DeleteUserURLs marks URLs as deleted for a specific user.
+// Only deletes URLs that belong to the specified user.
 func (s *PGStore) DeleteUserURLs(ctx context.Context, userID string, ids []string) error {
 	if len(ids) == 0 {
 		return nil
