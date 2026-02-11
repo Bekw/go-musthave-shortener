@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -17,21 +18,23 @@ import (
 	"github.com/Bekw/go-musthave-shortener/internal/model"
 )
 
-func mustInitDB(ctx context.Context, dsn string) *sql.DB {
+func initDB(ctx context.Context, dsn string) (*sql.DB, error) {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
-		log.Fatalf("open db: %v", err)
+		return nil, fmt.Errorf("open db: %w", err)
 	}
 
 	if err := db.PingContext(ctx); err != nil {
-		log.Fatalf("db ping failed: %v", err)
+		_ = db.Close()
+		return nil, fmt.Errorf("db ping failed: %w", err)
 	}
 
 	if err := model.EnsureSchema(ctx, db); err != nil {
-		log.Fatalf("ensure schema failed: %v", err)
+		_ = db.Close()
+		return nil, fmt.Errorf("ensure schema failed: %w", err)
 	}
 
-	return db
+	return db, nil
 }
 
 func main() {
@@ -45,14 +48,17 @@ func main() {
 
 	switch {
 	case cfg.DatabaseDSN != "":
-		db := mustInitDB(ctx, cfg.DatabaseDSN)
+		db, err := initDB(ctx, cfg.DatabaseDSN)
+		if err != nil {
+			log.Fatal(err)
+		}
 		store = model.NewPGStore(db)
 		logger.Info("using PostgreSQL storage", zap.String("dsn", cfg.DatabaseDSN))
 
 	case cfg.FilePath != "":
 		fs, err := model.NewFileStore(cfg.FilePath)
 		if err != nil {
-			logger.Fatal("init file store", zap.Error(err))
+			log.Fatal(err)
 		}
 		store = fs
 		logger.Info("using file storage", zap.String("path", cfg.FilePath))
