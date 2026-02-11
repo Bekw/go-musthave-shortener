@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -11,7 +12,6 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -117,8 +117,17 @@ func (h *Handler) signUserID(id string) string {
 	mac.Write([]byte(id))
 	sig := mac.Sum(nil)
 
-	payload := id + ":" + hex.EncodeToString(sig)
-	return base64.URLEncoding.EncodeToString([]byte(payload))
+	hexSig := make([]byte, hex.EncodedLen(len(sig)))
+	hex.Encode(hexSig, sig)
+
+	payload := make([]byte, len(id)+1+len(hexSig))
+	copy(payload, id)
+	payload[len(id)] = ':'
+	copy(payload[len(id)+1:], hexSig)
+
+	out := make([]byte, base64.URLEncoding.EncodedLen(len(payload)))
+	base64.URLEncoding.Encode(out, payload)
+	return string(out)
 }
 
 func (h *Handler) parseUserID(value string) (string, bool) {
@@ -127,26 +136,30 @@ func (h *Handler) parseUserID(value string) (string, bool) {
 		return "", false
 	}
 
-	parts := strings.SplitN(string(data), ":", 2)
-	if len(parts) != 2 {
+	i := bytes.IndexByte(data, ':')
+	if i <= 0 || i >= len(data)-1 {
 		return "", false
 	}
 
-	id := parts[0]
-	sigBytes, err := hex.DecodeString(parts[1])
+	idBytes := data[:i]
+	sigHex := data[i+1:]
+
+	sigBytes := make([]byte, hex.DecodedLen(len(sigHex)))
+	n, err := hex.Decode(sigBytes, sigHex)
 	if err != nil {
 		return "", false
 	}
+	sigBytes = sigBytes[:n]
 
 	mac := hmac.New(sha256.New, h.secretKey)
-	mac.Write([]byte(id))
+	mac.Write(idBytes)
 	expected := mac.Sum(nil)
 
 	if !hmac.Equal(sigBytes, expected) {
 		return "", false
 	}
 
-	return id, true
+	return string(idBytes), true
 }
 
 func (h *Handler) readUserID(r *http.Request) (string, bool, bool) {
@@ -208,7 +221,7 @@ func (h *Handler) PostHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	shortURL, _ := url.JoinPath(h.baseURL, id)
+	shortURL := h.baseURL + "/" + id
 
 	if err := h.store.AddUserURL(r.Context(), userID, id); err != nil {
 		h.log.Error("add user url", zap.Error(err))
@@ -299,7 +312,7 @@ func (h *Handler) PostJSONHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	shortURL, _ := url.JoinPath(h.baseURL, id)
+	shortURL := h.baseURL + "/" + id
 
 	if err := h.store.AddUserURL(r.Context(), userID, id); err != nil {
 		h.log.Error("add user url", zap.Error(err))
@@ -321,9 +334,7 @@ func (h *Handler) PostJSONHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 	}
 
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"result": shortURL,
-	})
+	_ = json.NewEncoder(w).Encode(shortenResponse{Result: shortURL})
 }
 
 func (h *Handler) PingHandler(w http.ResponseWriter, r *http.Request) {
@@ -380,7 +391,7 @@ func (h *Handler) PostBatchHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			shortURL, _ := url.JoinPath(h.baseURL, id)
+			shortURL := h.baseURL + "/" + id
 
 			if err := h.store.AddUserURL(r.Context(), userID, id); err != nil {
 				h.log.Error("add user url", zap.Error(err))
@@ -464,7 +475,7 @@ func (h *Handler) GetUserURLsHandler(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]respItem, 0, len(items))
 	for _, it := range items {
-		short, _ := url.JoinPath(h.baseURL, it.ID)
+		short := h.baseURL + "/" + it.ID
 		out = append(out, respItem{
 			ShortURL:    short,
 			OriginalURL: it.OriginalURL,
