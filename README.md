@@ -116,3 +116,14 @@ Dropped 79 nodes (cum <= 0.04GB)
          0     0% 96.80%     0.14GB  1.64%  net/url.ParseRequestURI
          0     0% 96.80%     8.39GB 99.94%  testing.(*B).launch
          0     0% 96.80%     8.39GB 99.94%  testing.(*B).runN
+
+### Iter18 
+
+PS C:\Users\b.konyrbayev\Desktop\goyandex\go-musthave-shortener> goimports -w (go list -f "{{.Dir}}" ./...)
+PS C:\Users\b.konyrbayev\Desktop\goyandex\go-musthave-shortener> go test ./...
+ok      github.com/Bekw/go-musthave-shortener/cmd/shortener     0.566s
+ok      github.com/Bekw/go-musthave-shortener/internal/audit    0.878s
+ok      github.com/Bekw/go-musthave-shortener/internal/config   (cached)
+?       github.com/Bekw/go-musthave-shortener/internal/handler  [no test files]
+?       github.com/Bekw/go-musthave-shortener/internal/middleware       [no test files]
+?       github.com/Bekw/go-musthave-shortener/internal/model    [no test files]
