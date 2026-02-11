@@ -72,10 +72,6 @@ func main() {
 		logger.Info("audit HTTP sink enabled", zap.String("url", cfg.AuditURL))
 	}
 
-	aud := audit.New()
-	aud.Add(audit.NewFileSink(cfg.AuditFile))
-	aud.Add(audit.NewHTTPSink(cfg.AuditURL, nil))
-
 	h := handler.NewHandler(store, cfg.BaseURL, logger)
 	h.SetAuditor(aud)
 
