@@ -13,11 +13,13 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"go.uber.org/zap"
 
+	"github.com/Bekw/go-musthave-shortener/internal/audit"
 	"github.com/Bekw/go-musthave-shortener/internal/model"
 )
 
@@ -40,6 +42,7 @@ type Handler struct {
 
 	secretKey []byte
 	deleteCh  chan deleteTask
+	aud       *audit.Auditor
 }
 
 type shortenRequest struct {
@@ -213,6 +216,13 @@ func (h *Handler) PostHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.publish(r.Context(), audit.Event{
+		TS:     time.Now().Unix(),
+		Action: "shorten",
+		UserID: userID,
+		URL:    original,
+	})
+
 	w.Header().Set("Content-Type", "text/plain")
 	if existed {
 		w.WriteHeader(http.StatusConflict)
@@ -242,6 +252,16 @@ func (h *Handler) GetHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id not found", http.StatusBadRequest)
 		return
 	}
+	uid := ""
+	if userID, has, valid := h.readUserID(r); has && valid {
+		uid = userID
+	}
+	h.publish(r.Context(), audit.Event{
+		TS:     time.Now().Unix(),
+		Action: "follow",
+		UserID: uid,
+		URL:    original,
+	})
 
 	w.Header().Set("Location", original)
 	w.WriteHeader(http.StatusTemporaryRedirect)
@@ -286,6 +306,13 @@ func (h *Handler) PostJSONHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "storage error", http.StatusInternalServerError)
 		return
 	}
+
+	h.publish(r.Context(), audit.Event{
+		TS:     time.Now().Unix(),
+		Action: "shorten",
+		UserID: userID,
+		URL:    original,
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	if existed {
@@ -494,4 +521,15 @@ func (h *Handler) DeleteUserURLsHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func (h *Handler) SetAuditor(a *audit.Auditor) {
+	h.aud = a
+}
+
+func (h *Handler) publish(ctx context.Context, e audit.Event) {
+	if h.aud == nil {
+		return
+	}
+	h.aud.Publish(ctx, e)
 }
