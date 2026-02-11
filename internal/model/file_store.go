@@ -20,6 +20,7 @@ type fileStore struct {
 	path string
 }
 
+// NewFileStore creates a file-backed storage and loads existing data from the given path.
 func NewFileStore(path string) (Store, error) {
 	fs := &fileStore{
 		memoryStore: &memoryStore{
@@ -109,6 +110,7 @@ func (f *fileStore) flush() error {
 	}
 	return nil
 }
+
 func (f *fileStore) MarkDeleted(ctx context.Context, ids []string) error {
 	if err := f.memoryStore.MarkDeleted(ctx, ids); err != nil {
 		return err

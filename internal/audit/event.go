@@ -1,8 +1,16 @@
 package audit
 
+type Action string
+
+const (
+	ActionShorten Action = "shorten"
+	ActionFollow  Action = "follow"
+	ActionDelete  Action = "delete"
+)
+
 type Event struct {
 	TS     int64  `json:"ts"`
-	Action string `json:"action"`
+	Action Action `json:"action"`
 	UserID string `json:"user_id,omitempty"`
 	URL    string `json:"url"`
 }
