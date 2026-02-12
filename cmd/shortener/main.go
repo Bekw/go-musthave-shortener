@@ -18,6 +18,32 @@ import (
 	"github.com/Bekw/go-musthave-shortener/internal/model"
 )
 
+var (
+	buildVersion string
+	buildDate    string
+	buildCommit  string
+)
+
+func printBuildInfo() {
+	v := buildVersion
+	d := buildDate
+	c := buildCommit
+
+	if v == "" {
+		v = "N/A"
+	}
+	if d == "" {
+		d = "N/A"
+	}
+	if c == "" {
+		c = "N/A"
+	}
+
+	fmt.Printf("Build version: %s\n", v)
+	fmt.Printf("Build date: %s\n", d)
+	fmt.Printf("Build commit: %s\n", c)
+}
+
 func initDB(ctx context.Context, dsn string) (*sql.DB, error) {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -38,6 +64,8 @@ func initDB(ctx context.Context, dsn string) (*sql.DB, error) {
 }
 
 func main() {
+	printBuildInfo()
+
 	cfg := config.FromFlags()
 	logger, _ := zap.NewProduction()
 	defer logger.Sync()
