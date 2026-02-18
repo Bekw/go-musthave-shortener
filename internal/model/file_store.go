@@ -120,3 +120,17 @@ func (f *fileStore) MarkDeleted(ctx context.Context, ids []string) error {
 	}
 	return nil
 }
+
+func (f *fileStore) DeleteUserURLs(ctx context.Context, userID string, ids []string) error {
+	if err := f.memoryStore.DeleteUserURLs(ctx, userID, ids); err != nil {
+		return err
+	}
+	if err := f.flush(); err != nil {
+		return fmt.Errorf("flush file store: %w", err)
+	}
+	return nil
+}
+
+func (f *fileStore) Close() error {
+	return f.flush()
+}

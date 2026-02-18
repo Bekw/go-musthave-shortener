@@ -489,3 +489,10 @@ func (h *Handler) publish(ctx context.Context, e audit.Event) {
 	}
 	h.aud.Publish(ctx, e)
 }
+// Shutdown gracefully stops background workers.
+func (h *Handler) Shutdown(ctx context.Context) error {
+	if h.urlService == nil {
+		return nil
+	}
+	return h.urlService.Shutdown(ctx)
+}

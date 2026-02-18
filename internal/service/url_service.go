@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math/rand"
+	"sync"
 
 	"go.uber.org/zap"
 
@@ -18,9 +19,12 @@ type deleteTask struct {
 
 // URLService handles business logic for URL shortening operations.
 type URLService struct {
-	store    model.Store
-	deleteCh chan deleteTask
-	log      *zap.Logger
+	store model.Store
+	log   *zap.Logger
+
+	deleteCh  chan deleteTask
+	closeOnce sync.Once
+	workerWG  sync.WaitGroup
 }
 
 // NewURLService creates a new URL service with background workers.
@@ -31,32 +35,53 @@ func NewURLService(store model.Store, log *zap.Logger) *URLService {
 
 	s := &URLService{
 		store:    store,
-		deleteCh: make(chan deleteTask, 128),
 		log:      log,
+		deleteCh: make(chan deleteTask, 128),
 	}
 
-	// Start background worker for async deletion
-	go s.deleteWorker(context.Background())
+	// Start background worker for async deletion.
+	s.workerWG.Add(1)
+	go s.deleteWorker()
 
 	return s
 }
 
 // deleteWorker processes deletion tasks from the channel.
-func (s *URLService) deleteWorker(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case task := <-s.deleteCh:
-			if len(task.ids) == 0 {
-				continue
-			}
+// It will finish processing all queued tasks after deleteCh is closed.
+func (s *URLService) deleteWorker() {
+	defer s.workerWG.Done()
 
-			if err := s.store.DeleteUserURLs(context.Background(), task.userID, task.ids); err != nil {
-				s.log.Error("async delete failed", zap.Error(err))
-				continue
-			}
+	for task := range s.deleteCh {
+		if len(task.ids) == 0 {
+			continue
 		}
+
+		if err := s.store.DeleteUserURLs(context.Background(), task.userID, task.ids); err != nil {
+			s.log.Error("async delete failed", zap.Error(err))
+			continue
+		}
+	}
+}
+
+// Shutdown gracefully stops background workers and waits until they finish.
+// Pass a context with timeout from main() so shutdown can't hang forever.
+func (s *URLService) Shutdown(ctx context.Context) error {
+	// Close channel once to signal worker to finish remaining tasks.
+	s.closeOnce.Do(func() {
+		close(s.deleteCh)
+	})
+
+	done := make(chan struct{})
+	go func() {
+		s.workerWG.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -103,7 +128,8 @@ func (s *URLService) SaveWithRetries(ctx context.Context, original string, maxTr
 
 // ScheduleDelete queues URLs for asynchronous deletion.
 // Returns an error if the deletion queue is full.
-func (s *URLService) ScheduleDelete(userID string, ids []string) error {
+// If shutdown has begun, returns an error.
+func (s *URLService) ScheduleDelete(userID string, ids []string) (err error) {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -112,6 +138,14 @@ func (s *URLService) ScheduleDelete(userID string, ids []string) error {
 		userID: userID,
 		ids:    append([]string(nil), ids...),
 	}
+
+	// If shutdown closes the channel concurrently with send, a panic is possible.
+	// Convert it to a normal error.
+	defer func() {
+		if r := recover(); r != nil {
+			err = errors.New("service is shutting down")
+		}
+	}()
 
 	select {
 	case s.deleteCh <- task:
