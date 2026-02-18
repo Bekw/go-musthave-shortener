@@ -21,6 +21,7 @@ type Config struct {
 	BaseURL     string `env:"BASE_URL" env-default:"http://localhost:8080"`
 	FilePath    string `env:"FILE_STORAGE_PATH" env-default:"storage.json"`
 	DatabaseDSN string `env:"DATABASE_DSN"`
+	EnableHTTPS bool   `env:"ENABLE_HTTPS"`
 	AuditFile   string `env:"AUDIT_FILE"`
 	AuditURL    string `env:"AUDIT_URL"`
 }
@@ -33,6 +34,7 @@ func FromFlags() *Config {
 	baseFlag := flag.String("b", DefaultBaseURL, "Base URL for short links")
 	fileFlag := flag.String("f", DefaultFilePath, "Path to JSON storage file")
 	dsnFlag := flag.String("d", "", "PostgreSQL DSN (e.g. postgres://user:pass@host:5432/db?sslmode=disable)")
+	enableHTTPSFlag := flag.Bool("s", false, "Enable HTTPS")
 	auditFileFlag := flag.String("audit-file", "", "Path to audit log file (newline-delimited JSON)")
 	auditURLFlag := flag.String("audit-url", "", "Remote audit receiver URL")
 	flag.Parse()
@@ -57,6 +59,9 @@ func FromFlags() *Config {
 
 	if cfg.DatabaseDSN == "" {
 		cfg.DatabaseDSN = *dsnFlag
+	}
+	if *enableHTTPSFlag {
+		cfg.EnableHTTPS = true
 	}
 	if cfg.AuditFile == "" {
 		cfg.AuditFile = *auditFileFlag

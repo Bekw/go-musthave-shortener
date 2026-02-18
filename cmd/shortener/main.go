@@ -122,5 +122,9 @@ func main() {
 	r.Get("/{id}", h.GetHandler)
 
 	logger.Info("server started", zap.String("addr", cfg.Address))
+	if cfg.EnableHTTPS {
+		logger.Info("HTTPS enabled", zap.String("cert", "cert.pem"), zap.String("key", "key.pem"))
+		log.Fatal(http.ListenAndServeTLS(cfg.Address, "cert.pem", "key.pem", r))
+	}
 	log.Fatal(http.ListenAndServe(cfg.Address, r))
 }
