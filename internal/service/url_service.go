@@ -11,6 +11,18 @@ import (
 	"github.com/Bekw/go-musthave-shortener/internal/model"
 )
 
+const (
+	defaultDeleteQueueBuffer = 128
+
+	shortIDAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	shortIDLength   = 6
+)
+
+var (
+	ErrDeleteQueueFull     = errors.New("delete queue is full")
+	ErrServiceShuttingDown = errors.New("service is shutting down")
+)
+
 // deleteTask represents a batch of URLs to delete for a user.
 type deleteTask struct {
 	userID string
@@ -22,7 +34,11 @@ type URLService struct {
 	store model.Store
 	log   *zap.Logger
 
-	deleteCh  chan deleteTask
+	deleteCh chan deleteTask
+
+	deleteMu sync.RWMutex
+	closed   bool
+
 	closeOnce sync.Once
 	workerWG  sync.WaitGroup
 }
@@ -36,7 +52,7 @@ func NewURLService(store model.Store, log *zap.Logger) *URLService {
 	s := &URLService{
 		store:    store,
 		log:      log,
-		deleteCh: make(chan deleteTask, 128),
+		deleteCh: make(chan deleteTask, defaultDeleteQueueBuffer),
 	}
 
 	// Start background worker for async deletion.
@@ -68,7 +84,10 @@ func (s *URLService) deleteWorker() {
 func (s *URLService) Shutdown(ctx context.Context) error {
 	// Close channel once to signal worker to finish remaining tasks.
 	s.closeOnce.Do(func() {
+		s.deleteMu.Lock()
+		s.closed = true
 		close(s.deleteCh)
+		s.deleteMu.Unlock()
 	})
 
 	done := make(chan struct{})
@@ -85,12 +104,11 @@ func (s *URLService) Shutdown(ctx context.Context) error {
 	}
 }
 
-// GenerateID generates a random 6-character alphanumeric ID.
+// GenerateID generates a random short ID.
 func GenerateID() string {
-	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, 6)
+	b := make([]byte, shortIDLength)
 	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))]
+		b[i] = shortIDAlphabet[rand.Intn(len(shortIDAlphabet))]
 	}
 	return string(b)
 }
@@ -127,9 +145,9 @@ func (s *URLService) SaveWithRetries(ctx context.Context, original string, maxTr
 }
 
 // ScheduleDelete queues URLs for asynchronous deletion.
-// Returns an error if the deletion queue is full.
-// If shutdown has begun, returns an error.
-func (s *URLService) ScheduleDelete(userID string, ids []string) (err error) {
+// Returns ErrDeleteQueueFull if the deletion queue is full.
+// If shutdown has begun, returns ErrServiceShuttingDown.
+func (s *URLService) ScheduleDelete(userID string, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -139,19 +157,18 @@ func (s *URLService) ScheduleDelete(userID string, ids []string) (err error) {
 		ids:    append([]string(nil), ids...),
 	}
 
-	// If shutdown closes the channel concurrently with send, a panic is possible.
-	// Convert it to a normal error.
-	defer func() {
-		if r := recover(); r != nil {
-			err = errors.New("service is shutting down")
-		}
-	}()
+	// Protect send vs close(deleteCh). No panic recovery needed.
+	s.deleteMu.RLock()
+	defer s.deleteMu.RUnlock()
+	if s.closed {
+		return ErrServiceShuttingDown
+	}
 
 	select {
 	case s.deleteCh <- task:
 		return nil
 	default:
-		return errors.New("delete queue is full")
+		return ErrDeleteQueueFull
 	}
 }
 

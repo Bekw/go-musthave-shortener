@@ -21,6 +21,8 @@ import (
 	"github.com/Bekw/go-musthave-shortener/internal/model"
 )
 
+const defaultShutdownTimeout = 10 * time.Second
+
 var (
 	buildVersion string
 	buildDate    string
@@ -73,7 +75,11 @@ type closer interface {
 func main() {
 	printBuildInfo()
 
-	cfg := config.FromFlags()
+	cfg, err := config.FromFlags()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	logger, _ := zap.NewProduction()
 	defer logger.Sync()
 
@@ -152,7 +158,7 @@ func main() {
 		}
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), defaultShutdownTimeout)
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
