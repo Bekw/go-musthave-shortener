@@ -51,9 +51,7 @@ func New(store model.Store, baseURL string, log *zap.Logger) *Server {
 	}
 }
 
-func (s *Server) SetAuditor(a *audit.Auditor) {
-	s.aud = a
-}
+func (s *Server) SetAuditor(a *audit.Auditor) { s.aud = a }
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	if s.urlSvc == nil {
@@ -72,13 +70,17 @@ func (s *Server) ShortenURL(ctx context.Context, req *pb.URLShortenRequest) (*pb
 		return nil, status.Error(codes.InvalidArgument, "empty url")
 	}
 
-	userID, token, _, err := s.getOrCreateUser(ctx)
+	userID, token, created, err := s.getOrCreateUser(ctx)
 	if err != nil {
 		return nil, err
 	}
-	_ = grpc.SetHeader(ctx, metadata.Pairs(authHeaderKey, token))
+	if created {
+		if err := grpc.SetHeader(ctx, metadata.Pairs(authHeaderKey, token)); err != nil {
+			s.log.Warn("grpc set header failed", zap.Error(err))
+		}
+	}
 
-	id, _, err := s.urlSvc.SaveWithRetries(ctx, original, 5)
+	id, existed, err := s.urlSvc.SaveWithRetries(ctx, original, 5)
 	if err != nil {
 		s.log.Error("grpc save error", zap.Error(err))
 		return nil, status.Error(codes.Internal, "storage error")
@@ -98,6 +100,10 @@ func (s *Server) ShortenURL(ctx context.Context, req *pb.URLShortenRequest) (*pb
 		URL:    original,
 	})
 
+	if existed {
+		return nil, status.Error(codes.AlreadyExists, shortURL)
+	}
+
 	return &pb.URLShortenResponse{Result: shortURL}, nil
 }
 
@@ -116,7 +122,7 @@ func (s *Server) ExpandURL(ctx context.Context, req *pb.URLExpandRequest) (*pb.U
 		return nil, status.Error(codes.Internal, "storage error")
 	}
 	if !ok {
-		return nil, status.Error(codes.NotFound, "not found")
+		return nil, status.Error(codes.InvalidArgument, "id not found")
 	}
 
 	uid, _ := s.userIDFromAuth(ctx)
@@ -128,15 +134,19 @@ func (s *Server) ExpandURL(ctx context.Context, req *pb.URLExpandRequest) (*pb.U
 		URL:    original,
 	})
 
-	return &pb.URLExpandResponse{Result: original}, nil
+	return &pb.URLExpandResponse{Url: original}, nil
 }
 
 func (s *Server) ListUserURLs(ctx context.Context, _ *emptypb.Empty) (*pb.UserURLsResponse, error) {
-	userID, token, _, err := s.getOrCreateUser(ctx)
+	userID, token, created, err := s.getOrCreateUser(ctx)
 	if err != nil {
 		return nil, err
 	}
-	_ = grpc.SetHeader(ctx, metadata.Pairs(authHeaderKey, token))
+	if created {
+		if err := grpc.SetHeader(ctx, metadata.Pairs(authHeaderKey, token)); err != nil {
+			s.log.Warn("grpc set header failed", zap.Error(err))
+		}
+	}
 
 	items, err := s.urlSvc.GetUserURLs(ctx, userID)
 	if err != nil {
@@ -144,15 +154,15 @@ func (s *Server) ListUserURLs(ctx context.Context, _ *emptypb.Empty) (*pb.UserUR
 		return nil, status.Error(codes.Internal, "storage error")
 	}
 
-	out := make([]*pb.URLData, 0, len(items))
+	out := make([]*pb.UserURL, 0, len(items))
 	for _, it := range items {
-		out = append(out, &pb.URLData{
+		out = append(out, &pb.UserURL{
 			ShortUrl:    s.baseURL + "/" + it.ID,
 			OriginalUrl: it.OriginalURL,
 		})
 	}
 
-	return &pb.UserURLsResponse{Url: out}, nil
+	return &pb.UserURLsResponse{Items: out}, nil
 }
 
 func (s *Server) publish(ctx context.Context, e audit.Event) {
@@ -168,7 +178,7 @@ func (s *Server) newUserID() string {
 
 func (s *Server) signUserID(id string) string {
 	mac := hmac.New(sha256.New, s.secretKey)
-	mac.Write([]byte(id))
+	_, _ = mac.Write([]byte(id))
 	sig := mac.Sum(nil)
 
 	hexSig := make([]byte, hex.EncodedLen(len(sig)))
@@ -206,7 +216,7 @@ func (s *Server) parseUserID(value string) (string, bool) {
 	sigBytes = sigBytes[:n]
 
 	mac := hmac.New(sha256.New, s.secretKey)
-	mac.Write(idBytes)
+	_, _ = mac.Write(idBytes)
 	expected := mac.Sum(nil)
 
 	if !hmac.Equal(sigBytes, expected) {
@@ -222,7 +232,7 @@ func (s *Server) getOrCreateUser(ctx context.Context) (string, string, bool, err
 	if len(vals) == 0 || strings.TrimSpace(vals[0]) == "" {
 		uid := s.newUserID()
 		tok := s.signUserID(uid)
-		return uid, tok, false, nil
+		return uid, tok, true, nil
 	}
 
 	auth := strings.TrimSpace(vals[0])
@@ -231,9 +241,9 @@ func (s *Server) getOrCreateUser(ctx context.Context) (string, string, bool, err
 	}
 	uid, ok := s.parseUserID(auth)
 	if !ok || uid == "" {
-		return "", "", true, status.Error(codes.Unauthenticated, "invalid authorization")
+		return "", "", false, status.Error(codes.Unauthenticated, "invalid authorization")
 	}
-	return uid, auth, true, nil
+	return uid, auth, false, nil
 }
 
 func (s *Server) userIDFromAuth(ctx context.Context) (string, bool) {
