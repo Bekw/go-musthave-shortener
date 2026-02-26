@@ -121,6 +121,9 @@ func main() {
 
 	h := handler.NewHandler(store, cfg.BaseURL, logger)
 	h.SetAuditor(aud)
+	if err := h.SetTrustedSubnet(cfg.TrustedSubnet); err != nil {
+		log.Fatal(err)
+	}
 
 	r := chi.NewRouter()
 	r.Use(appmw.Logger(logger))
@@ -132,6 +135,7 @@ func main() {
 	r.Post("/api/shorten/batch", h.PostBatchHandler)
 	r.Get("/api/user/urls", h.GetUserURLsHandler)
 	r.Delete("/api/user/urls", h.DeleteUserURLsHandler)
+	r.Get("/api/internal/stats", h.InternalStatsHandler)
 	r.Get("/{id}", h.GetHandler)
 
 	srv := &http.Server{

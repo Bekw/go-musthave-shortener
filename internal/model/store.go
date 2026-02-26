@@ -23,6 +23,9 @@ type Store interface {
 	Get(ctx context.Context, id string) (string, bool, error)
 	FindByOriginal(ctx context.Context, url string) (string, bool, error)
 	Ping(ctx context.Context) error
+	// Stats returns the number of active (non-deleted) URLs and the number of users
+	// who currently have at least one active URL.
+	Stats(ctx context.Context) (urls int, users int, err error)
 	MarkDeleted(ctx context.Context, ids []string) error
 	AddUserURL(ctx context.Context, userID, urlID string) error
 	GetUserURLs(ctx context.Context, userID string) ([]UserURL, error)
@@ -92,6 +95,40 @@ func (m *memoryStore) FindByOriginal(ctx context.Context, url string) (string, b
 
 func (m *memoryStore) Ping(ctx context.Context) error {
 	return nil
+}
+
+func (m *memoryStore) Stats(ctx context.Context) (urls int, users int, err error) {
+	_ = ctx
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// Count active URLs.
+	for id := range m.mp {
+		if m.deleted != nil && m.deleted[id] {
+			continue
+		}
+		urls++
+	}
+
+	// Count users with at least one active URL.
+	for _, set := range m.userURLs {
+		if len(set) == 0 {
+			continue
+		}
+		for id := range set {
+			if _, ok := m.mp[id]; !ok {
+				continue
+			}
+			if m.deleted != nil && m.deleted[id] {
+				continue
+			}
+			users++
+			break
+		}
+	}
+
+	return urls, users, nil
 }
 
 func (e *DuplicateURLError) Error() string {
