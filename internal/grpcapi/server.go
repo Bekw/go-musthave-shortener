@@ -26,6 +26,7 @@ import (
 
 const authHeaderKey = "authorization"
 
+// Server implements ShortenerService gRPC API.
 type Server struct {
 	pb.UnimplementedShortenerServiceServer
 
@@ -64,6 +65,7 @@ func (s *Server) Register(grpcServer *grpc.Server) {
 	pb.RegisterShortenerServiceServer(grpcServer, s)
 }
 
+// ShortenURL is an analogue of POST /api/shorten.
 func (s *Server) ShortenURL(ctx context.Context, req *pb.URLShortenRequest) (*pb.URLShortenResponse, error) {
 	original := strings.TrimSpace(req.GetUrl())
 	if original == "" {
@@ -86,12 +88,13 @@ func (s *Server) ShortenURL(ctx context.Context, req *pb.URLShortenRequest) (*pb
 		return nil, status.Error(codes.Internal, "storage error")
 	}
 
+	shortURL := s.baseURL + "/" + id
+
+	// Same as HTTP: even if URL already existed, associate it with user.
 	if err := s.urlSvc.AddUserURL(ctx, userID, id); err != nil {
 		s.log.Error("grpc add user url", zap.Error(err))
 		return nil, status.Error(codes.Internal, "storage error")
 	}
-
-	shortURL := s.baseURL + "/" + id
 
 	s.publish(ctx, audit.Event{
 		TS:     time.Now().Unix(),
@@ -101,12 +104,14 @@ func (s *Server) ShortenURL(ctx context.Context, req *pb.URLShortenRequest) (*pb
 	})
 
 	if existed {
+		// HTTP returns 409 with shortURL in body; in gRPC use AlreadyExists with shortURL in message.
 		return nil, status.Error(codes.AlreadyExists, shortURL)
 	}
 
 	return &pb.URLShortenResponse{Result: shortURL}, nil
 }
 
+// ExpandURL is an analogue of GET /{id}.
 func (s *Server) ExpandURL(ctx context.Context, req *pb.URLExpandRequest) (*pb.URLExpandResponse, error) {
 	id := strings.TrimSpace(req.GetId())
 	if id == "" {
@@ -116,12 +121,14 @@ func (s *Server) ExpandURL(ctx context.Context, req *pb.URLExpandRequest) (*pb.U
 	original, ok, err := s.urlSvc.Get(ctx, id)
 	if err != nil {
 		if errors.Is(err, model.ErrDeleted) {
+			// HTTP returns 410 Gone.
 			return nil, status.Error(codes.FailedPrecondition, "url deleted")
 		}
 		s.log.Error("grpc get error", zap.Error(err))
 		return nil, status.Error(codes.Internal, "storage error")
 	}
 	if !ok {
+		// HTTP handler returns 400 for unknown id.
 		return nil, status.Error(codes.InvalidArgument, "id not found")
 	}
 
@@ -134,9 +141,10 @@ func (s *Server) ExpandURL(ctx context.Context, req *pb.URLExpandRequest) (*pb.U
 		URL:    original,
 	})
 
-	return &pb.URLExpandResponse{Url: original}, nil
+	return &pb.URLExpandResponse{Result: original}, nil
 }
 
+// ListUserURLs is an analogue of GET /api/user/urls.
 func (s *Server) ListUserURLs(ctx context.Context, _ *emptypb.Empty) (*pb.UserURLsResponse, error) {
 	userID, token, created, err := s.getOrCreateUser(ctx)
 	if err != nil {
@@ -154,15 +162,15 @@ func (s *Server) ListUserURLs(ctx context.Context, _ *emptypb.Empty) (*pb.UserUR
 		return nil, status.Error(codes.Internal, "storage error")
 	}
 
-	out := make([]*pb.UserURL, 0, len(items))
+	out := make([]*pb.URLData, 0, len(items))
 	for _, it := range items {
-		out = append(out, &pb.UserURL{
+		out = append(out, &pb.URLData{
 			ShortUrl:    s.baseURL + "/" + it.ID,
 			OriginalUrl: it.OriginalURL,
 		})
 	}
 
-	return &pb.UserURLsResponse{Items: out}, nil
+	return &pb.UserURLsResponse{Url: out}, nil
 }
 
 func (s *Server) publish(ctx context.Context, e audit.Event) {
@@ -176,6 +184,8 @@ func (s *Server) newUserID() string {
 	return service.GenerateID() + service.GenerateID()
 }
 
+// signUserID creates token value compatible with HTTP cookie signing in this repo.
+// Format: base64(userID:hex(hmac_signature))
 func (s *Server) signUserID(id string) string {
 	mac := hmac.New(sha256.New, s.secretKey)
 	_, _ = mac.Write([]byte(id))
@@ -226,6 +236,8 @@ func (s *Server) parseUserID(value string) (string, bool) {
 	return string(idBytes), true
 }
 
+// getOrCreateUser reads token from incoming metadata. If missing -> creates a new token.
+// Returns: (userID, token, createdNow, error)
 func (s *Server) getOrCreateUser(ctx context.Context) (string, string, bool, error) {
 	md, _ := metadata.FromIncomingContext(ctx)
 	vals := md.Get(authHeaderKey)
@@ -239,10 +251,13 @@ func (s *Server) getOrCreateUser(ctx context.Context) (string, string, bool, err
 	if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
 		auth = strings.TrimSpace(auth[len("bearer "):])
 	}
+
 	uid, ok := s.parseUserID(auth)
 	if !ok || uid == "" {
+		// close to HTTP behaviour could be "create new", but explicit auth header usually means client expects auth.
 		return "", "", false, status.Error(codes.Unauthenticated, "invalid authorization")
 	}
+
 	return uid, auth, false, nil
 }
 
@@ -252,10 +267,12 @@ func (s *Server) userIDFromAuth(ctx context.Context) (string, bool) {
 	if len(vals) == 0 || strings.TrimSpace(vals[0]) == "" {
 		return "", false
 	}
+
 	auth := strings.TrimSpace(vals[0])
 	if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
 		auth = strings.TrimSpace(auth[len("bearer "):])
 	}
+
 	uid, ok := s.parseUserID(auth)
 	if !ok || uid == "" {
 		return "", false

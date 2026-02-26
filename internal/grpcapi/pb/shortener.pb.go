@@ -481,7 +481,7 @@ func file_api_shortener_proto_init() {
 	if File_api_shortener_proto != nil {
 		return
 	}
-	// NOTE: Exporter assignments removed to satisfy static analysis.
+
 
 	type x struct{}
 	out := protoimpl.TypeBuilder{
