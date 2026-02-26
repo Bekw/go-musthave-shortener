@@ -7,6 +7,13 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
+const (
+	defaultHTTPTimeout      = 5 * time.Second
+	defaultRetryCount       = 3
+	defaultRetryWaitTime    = 1 * time.Second
+	defaultRetryMaxWaitTime = 5 * time.Second
+)
+
 type HTTPSink struct {
 	client *resty.Client
 	url    string
@@ -19,10 +26,10 @@ func NewHTTPSink(url string, client *resty.Client) *HTTPSink {
 
 	if client == nil {
 		client = resty.New().
-			SetTimeout(5 * time.Second).
-			SetRetryCount(3).
-			SetRetryWaitTime(1 * time.Second).
-			SetRetryMaxWaitTime(5 * time.Second)
+			SetTimeout(defaultHTTPTimeout).
+			SetRetryCount(defaultRetryCount).
+			SetRetryWaitTime(defaultRetryWaitTime).
+			SetRetryMaxWaitTime(defaultRetryMaxWaitTime)
 	}
 
 	return &HTTPSink{

@@ -4,10 +4,23 @@ import (
 	"context"
 	"errors"
 	"math/rand"
+	"sync"
 
 	"go.uber.org/zap"
 
 	"github.com/Bekw/go-musthave-shortener/internal/model"
+)
+
+const (
+	defaultDeleteQueueBuffer = 128
+
+	shortIDAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	shortIDLength   = 6
+)
+
+var (
+	ErrDeleteQueueFull     = errors.New("delete queue is full")
+	ErrServiceShuttingDown = errors.New("service is shutting down")
 )
 
 // deleteTask represents a batch of URLs to delete for a user.
@@ -18,9 +31,16 @@ type deleteTask struct {
 
 // URLService handles business logic for URL shortening operations.
 type URLService struct {
-	store    model.Store
+	store model.Store
+	log   *zap.Logger
+
 	deleteCh chan deleteTask
-	log      *zap.Logger
+
+	deleteMu sync.RWMutex
+	closed   bool
+
+	closeOnce sync.Once
+	workerWG  sync.WaitGroup
 }
 
 // NewURLService creates a new URL service with background workers.
@@ -31,41 +51,64 @@ func NewURLService(store model.Store, log *zap.Logger) *URLService {
 
 	s := &URLService{
 		store:    store,
-		deleteCh: make(chan deleteTask, 128),
 		log:      log,
+		deleteCh: make(chan deleteTask, defaultDeleteQueueBuffer),
 	}
 
-	// Start background worker for async deletion
-	go s.deleteWorker(context.Background())
+	// Start background worker for async deletion.
+	s.workerWG.Add(1)
+	go s.deleteWorker()
 
 	return s
 }
 
 // deleteWorker processes deletion tasks from the channel.
-func (s *URLService) deleteWorker(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case task := <-s.deleteCh:
-			if len(task.ids) == 0 {
-				continue
-			}
+// It will finish processing all queued tasks after deleteCh is closed.
+func (s *URLService) deleteWorker() {
+	defer s.workerWG.Done()
 
-			if err := s.store.DeleteUserURLs(context.Background(), task.userID, task.ids); err != nil {
-				s.log.Error("async delete failed", zap.Error(err))
-				continue
-			}
+	for task := range s.deleteCh {
+		if len(task.ids) == 0 {
+			continue
+		}
+
+		if err := s.store.DeleteUserURLs(context.Background(), task.userID, task.ids); err != nil {
+			s.log.Error("async delete failed", zap.Error(err))
+			continue
 		}
 	}
 }
 
-// GenerateID generates a random 6-character alphanumeric ID.
+// Shutdown gracefully stops background workers and waits until they finish.
+// Pass a context with timeout from main() so shutdown can't hang forever.
+func (s *URLService) Shutdown(ctx context.Context) error {
+	// Close channel once to signal worker to finish remaining tasks.
+	s.closeOnce.Do(func() {
+		s.deleteMu.Lock()
+		s.closed = true
+		close(s.deleteCh)
+		s.deleteMu.Unlock()
+	})
+
+	done := make(chan struct{})
+	go func() {
+		s.workerWG.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// GenerateID generates a random short ID.
 func GenerateID() string {
-	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, 6)
+	b := make([]byte, shortIDLength)
 	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))]
+		b[i] = shortIDAlphabet[rand.Intn(len(shortIDAlphabet))]
 	}
 	return string(b)
 }
@@ -102,7 +145,8 @@ func (s *URLService) SaveWithRetries(ctx context.Context, original string, maxTr
 }
 
 // ScheduleDelete queues URLs for asynchronous deletion.
-// Returns an error if the deletion queue is full.
+// Returns ErrDeleteQueueFull if the deletion queue is full.
+// If shutdown has begun, returns ErrServiceShuttingDown.
 func (s *URLService) ScheduleDelete(userID string, ids []string) error {
 	if len(ids) == 0 {
 		return nil
@@ -113,11 +157,18 @@ func (s *URLService) ScheduleDelete(userID string, ids []string) error {
 		ids:    append([]string(nil), ids...),
 	}
 
+	// Protect send vs close(deleteCh). No panic recovery needed.
+	s.deleteMu.RLock()
+	defer s.deleteMu.RUnlock()
+	if s.closed {
+		return ErrServiceShuttingDown
+	}
+
 	select {
 	case s.deleteCh <- task:
 		return nil
 	default:
-		return errors.New("delete queue is full")
+		return ErrDeleteQueueFull
 	}
 }
 

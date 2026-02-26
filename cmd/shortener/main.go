@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -17,6 +20,8 @@ import (
 	appmw "github.com/Bekw/go-musthave-shortener/internal/middleware"
 	"github.com/Bekw/go-musthave-shortener/internal/model"
 )
+
+const defaultShutdownTimeout = 10 * time.Second
 
 var (
 	buildVersion string
@@ -63,10 +68,18 @@ func initDB(ctx context.Context, dsn string) (*sql.DB, error) {
 	return db, nil
 }
 
+type closer interface {
+	Close() error
+}
+
 func main() {
 	printBuildInfo()
 
-	cfg := config.FromFlags()
+	cfg, err := config.FromFlags()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	logger, _ := zap.NewProduction()
 	defer logger.Sync()
 
@@ -121,10 +134,46 @@ func main() {
 	r.Delete("/api/user/urls", h.DeleteUserURLsHandler)
 	r.Get("/{id}", h.GetHandler)
 
-	logger.Info("server started", zap.String("addr", cfg.Address))
-	if cfg.EnableHTTPS {
-		logger.Info("HTTPS enabled", zap.String("cert", "cert.pem"), zap.String("key", "key.pem"))
-		log.Fatal(http.ListenAndServeTLS(cfg.Address, "cert.pem", "key.pem", r))
+	srv := &http.Server{
+		Addr:    cfg.Address,
+		Handler: r,
 	}
-	log.Fatal(http.ListenAndServe(cfg.Address, r))
+
+	errCh := make(chan error, 1)
+	go func() {
+		logger.Info("server started", zap.String("addr", cfg.Address))
+		errCh <- srv.ListenAndServe()
+	}()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	defer signal.Stop(sigCh)
+
+	select {
+	case sig := <-sigCh:
+		logger.Info("shutdown signal received", zap.String("signal", sig.String()))
+	case err := <-errCh:
+		if err != nil && err != http.ErrServerClosed {
+			logger.Fatal("server error", zap.Error(err))
+		}
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), defaultShutdownTimeout)
+	defer cancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logger.Error("http server shutdown error", zap.Error(err))
+	}
+
+	if err := h.Shutdown(shutdownCtx); err != nil {
+		logger.Error("handler shutdown error", zap.Error(err))
+	}
+
+	if c, ok := store.(closer); ok {
+		if err := c.Close(); err != nil {
+			logger.Error("store close error", zap.Error(err))
+		}
+	}
+
+	logger.Info("server stopped")
 }

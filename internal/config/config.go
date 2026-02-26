@@ -52,18 +52,15 @@ func defaultConfig() Config {
 	}
 }
 
-func applyJSONFile(cfg *Config, path string) {
+func applyJSONFile(cfg *Config, path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		// The task doesn't require a hard-fail on missing config.
-		fmt.Fprintf(os.Stderr, "config: can't read %q: %v\n", path, err)
-		return
+		return fmt.Errorf("config: can't read %q: %w", path, err)
 	}
 
 	var jc jsonConfig
 	if err := json.Unmarshal(data, &jc); err != nil {
-		fmt.Fprintf(os.Stderr, "config: can't parse %q: %v\n", path, err)
-		return
+		return fmt.Errorf("config: can't parse %q: %w", path, err)
 	}
 
 	if jc.Address != nil {
@@ -87,6 +84,8 @@ func applyJSONFile(cfg *Config, path string) {
 	if jc.AuditURL != nil {
 		cfg.AuditURL = *jc.AuditURL
 	}
+
+	return nil
 }
 
 func applyEnv(cfg *Config) {
@@ -115,7 +114,7 @@ func applyEnv(cfg *Config) {
 	}
 }
 
-func FromFlags() *Config {
+func FromFlags() (*Config, error) {
 	cfg := defaultConfig()
 
 	var (
@@ -151,7 +150,9 @@ func FromFlags() *Config {
 		path = configPath
 	}
 	if path != "" {
-		applyJSONFile(&cfg, path)
+		if err := applyJSONFile(&cfg, path); err != nil {
+			return nil, err
+		}
 	}
 
 	applyEnv(&cfg)
@@ -178,7 +179,7 @@ func FromFlags() *Config {
 		cfg.AuditURL = auditURLFlag
 	}
 
-	return &cfg
+	return &cfg, nil
 }
 
 func NewConfig(flagAddr, flagBase, flagFile string) *Config {
