@@ -19,11 +19,12 @@ const (
 
 // Config holds runtime configuration for the shortener server.
 type Config struct {
-	Address     string
-	BaseURL     string
-	FilePath    string
-	DatabaseDSN string
-	EnableHTTPS bool
+	Address       string
+	BaseURL       string
+	FilePath      string
+	DatabaseDSN   string
+	EnableHTTPS   bool
+	TrustedSubnet string
 
 	// Not part of the YP track options, but used in this repo.
 	AuditFile string
@@ -33,11 +34,12 @@ type Config struct {
 // jsonConfig matches the config.json format from the task.
 // We use pointers to distinguish “field is absent” vs “field is present with zero value”.
 type jsonConfig struct {
-	Address     *string `json:"server_address"`
-	BaseURL     *string `json:"base_url"`
-	FilePath    *string `json:"file_storage_path"`
-	DatabaseDSN *string `json:"database_dsn"`
-	EnableHTTPS *bool   `json:"enable_https"`
+	Address       *string `json:"server_address"`
+	BaseURL       *string `json:"base_url"`
+	FilePath      *string `json:"file_storage_path"`
+	DatabaseDSN   *string `json:"database_dsn"`
+	EnableHTTPS   *bool   `json:"enable_https"`
+	TrustedSubnet *string `json:"trusted_subnet"`
 
 	// Optional fields (not required by the task but supported if present).
 	AuditFile *string `json:"audit_file,omitempty"`
@@ -78,6 +80,9 @@ func applyJSONFile(cfg *Config, path string) error {
 	if jc.EnableHTTPS != nil {
 		cfg.EnableHTTPS = *jc.EnableHTTPS
 	}
+	if jc.TrustedSubnet != nil {
+		cfg.TrustedSubnet = *jc.TrustedSubnet
+	}
 	if jc.AuditFile != nil {
 		cfg.AuditFile = *jc.AuditFile
 	}
@@ -106,6 +111,9 @@ func applyEnv(cfg *Config) {
 			cfg.EnableHTTPS = b
 		}
 	}
+	if v, ok := os.LookupEnv("TRUSTED_SUBNET"); ok {
+		cfg.TrustedSubnet = v
+	}
 	if v, ok := os.LookupEnv("AUDIT_FILE"); ok {
 		cfg.AuditFile = v
 	}
@@ -123,6 +131,7 @@ func FromFlags() (*Config, error) {
 		fileFlag      string
 		dsnFlag       string
 		enableHTTPS   bool
+		trustedSubnet string
 		configPath    string
 		auditFileFlag string
 		auditURLFlag  string
@@ -134,6 +143,7 @@ func FromFlags() (*Config, error) {
 	fs.StringVar(&fileFlag, "f", "", "Path to JSON storage file")
 	fs.StringVar(&dsnFlag, "d", "", "PostgreSQL DSN (e.g. postgres://user:pass@host:5432/db?sslmode=disable)")
 	fs.BoolVar(&enableHTTPS, "s", false, "Enable HTTPS")
+	fs.StringVar(&trustedSubnet, "t", "", "Trusted subnet CIDR for /api/internal/* endpoints")
 	fs.StringVar(&configPath, "c", "", "Path to JSON config file")
 	fs.StringVar(&configPath, "config", "", "Path to JSON config file")
 	fs.StringVar(&auditFileFlag, "audit-file", "", "Path to audit log file (newline-delimited JSON)")
@@ -171,6 +181,9 @@ func FromFlags() (*Config, error) {
 	}
 	if provided["s"] {
 		cfg.EnableHTTPS = enableHTTPS
+	}
+	if provided["t"] {
+		cfg.TrustedSubnet = trustedSubnet
 	}
 	if provided["audit-file"] {
 		cfg.AuditFile = auditFileFlag
