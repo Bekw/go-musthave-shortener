@@ -8,14 +8,19 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"go.uber.org/zap"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
+	"google.golang.org/grpc"
 
 	"github.com/Bekw/go-musthave-shortener/internal/audit"
 	"github.com/Bekw/go-musthave-shortener/internal/config"
+	"github.com/Bekw/go-musthave-shortener/internal/grpcapi"
 	"github.com/Bekw/go-musthave-shortener/internal/handler"
 	appmw "github.com/Bekw/go-musthave-shortener/internal/middleware"
 	"github.com/Bekw/go-musthave-shortener/internal/model"
@@ -125,6 +130,12 @@ func main() {
 		log.Fatal(err)
 	}
 
+	grpcImpl := grpcapi.New(store, cfg.BaseURL, logger)
+	grpcImpl.SetAuditor(aud)
+
+	grpcSrv := grpc.NewServer()
+	grpcImpl.Register(grpcSrv)
+
 	r := chi.NewRouter()
 	r.Use(appmw.Logger(logger))
 	r.Use(appmw.Gzip())
@@ -138,14 +149,31 @@ func main() {
 	r.Get("/api/internal/stats", h.InternalStatsHandler)
 	r.Get("/{id}", h.GetHandler)
 
+	mux := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.ProtoMajor == 2 && strings.HasPrefix(req.Header.Get("Content-Type"), "application/grpc") {
+			grpcSrv.ServeHTTP(w, req)
+			return
+		}
+		r.ServeHTTP(w, req)
+	})
+
+	var handlerWithH2 http.Handler = mux
+	if !cfg.EnableHTTPS {
+		handlerWithH2 = h2c.NewHandler(handlerWithH2, &http2.Server{})
+	}
+
 	srv := &http.Server{
 		Addr:    cfg.Address,
-		Handler: r,
+		Handler: handlerWithH2,
 	}
 
 	errCh := make(chan error, 1)
 	go func() {
 		logger.Info("server started", zap.String("addr", cfg.Address))
+		if cfg.EnableHTTPS {
+			errCh <- srv.ListenAndServeTLS("cert.pem", "key.pem")
+			return
+		}
 		errCh <- srv.ListenAndServe()
 	}()
 
@@ -168,9 +196,13 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("http server shutdown error", zap.Error(err))
 	}
+	grpcSrv.GracefulStop()
 
 	if err := h.Shutdown(shutdownCtx); err != nil {
 		logger.Error("handler shutdown error", zap.Error(err))
+	}
+	if err := grpcImpl.Shutdown(shutdownCtx); err != nil {
+		logger.Error("grpc handler shutdown error", zap.Error(err))
 	}
 
 	if c, ok := store.(closer); ok {
