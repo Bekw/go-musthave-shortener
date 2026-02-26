@@ -62,13 +62,6 @@ func applyJSONFile(cfg *Config, path string) error {
 	if err := json.Unmarshal(data, &jc); err != nil {
 		return fmt.Errorf("config: can't parse %q: %w", path, err)
 	}
-	if jc.AuditFile != nil {
-		cfg.AuditFile = *jc.AuditFile
-	}
-	if jc.AuditURL != nil {
-		cfg.AuditURL = *jc.AuditURL
-	}
-}
 
 	if jc.Address != nil {
 		cfg.Address = *jc.Address
