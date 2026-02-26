@@ -4,6 +4,8 @@
 // 	protoc        vX.Y.Z
 // source: api/shortener.proto
 
+
+//lint:file-ignore SA1019 generated protobuf code uses deprecated protoimpl.MessageInfo.Exporter for compatibility
 package pb
 
 import (
