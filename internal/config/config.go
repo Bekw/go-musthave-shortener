@@ -29,6 +29,7 @@ type Config struct {
 	// Not part of the YP track options, but used in this repo.
 	AuditFile string
 	AuditURL  string
+	SecretKey string
 }
 
 // jsonConfig matches the config.json format from the task.
@@ -120,6 +121,9 @@ func applyEnv(cfg *Config) {
 	if v, ok := os.LookupEnv("AUDIT_URL"); ok {
 		cfg.AuditURL = v
 	}
+	if v, ok := os.LookupEnv("SECRET_KEY"); ok {
+		cfg.SecretKey = v
+	}
 }
 
 func FromFlags() (*Config, error) {
@@ -148,6 +152,8 @@ func FromFlags() (*Config, error) {
 	fs.StringVar(&configPath, "config", "", "Path to JSON config file")
 	fs.StringVar(&auditFileFlag, "audit-file", "", "Path to audit log file (newline-delimited JSON)")
 	fs.StringVar(&auditURLFlag, "audit-url", "", "Remote audit receiver URL")
+	var secretKeyFlag string
+	fs.StringVar(&secretKeyFlag, "secret-key", "", "HMAC secret key for signing user tokens")
 	_ = fs.Parse(os.Args[1:])
 
 	provided := map[string]bool{}
@@ -190,6 +196,9 @@ func FromFlags() (*Config, error) {
 	}
 	if provided["audit-url"] {
 		cfg.AuditURL = auditURLFlag
+	}
+	if provided["secret-key"] {
+		cfg.SecretKey = secretKeyFlag
 	}
 
 	return &cfg, nil

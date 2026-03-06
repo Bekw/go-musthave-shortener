@@ -38,9 +38,12 @@ type Server struct {
 	aud       *audit.Auditor
 }
 
-func New(store model.Store, baseURL string, log *zap.Logger) *Server {
+func New(store model.Store, baseURL string, log *zap.Logger, secretKey []byte) *Server {
 	if log == nil {
 		log = zap.NewNop()
+	}
+	if len(secretKey) == 0 {
+		secretKey = []byte("very-secret-key")
 	}
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	return &Server{
@@ -48,7 +51,7 @@ func New(store model.Store, baseURL string, log *zap.Logger) *Server {
 		urlSvc:    service.NewURLService(store, log),
 		baseURL:   baseURL,
 		log:       log,
-		secretKey: []byte("very-secret-key"),
+		secretKey: secretKey,
 	}
 }
 
@@ -236,24 +239,33 @@ func (s *Server) parseUserID(value string) (string, bool) {
 	return string(idBytes), true
 }
 
-// getOrCreateUser reads token from incoming metadata. If missing -> creates a new token.
-// Returns: (userID, token, createdNow, error)
-func (s *Server) getOrCreateUser(ctx context.Context) (string, string, bool, error) {
+// extractTokenFromMD reads and normalises the authorization token from gRPC incoming metadata.
+// Returns the raw token string and true if present, or empty string and false otherwise.
+func extractTokenFromMD(ctx context.Context) (string, bool) {
 	md, _ := metadata.FromIncomingContext(ctx)
 	vals := md.Get(authHeaderKey)
 	if len(vals) == 0 || strings.TrimSpace(vals[0]) == "" {
+		return "", false
+	}
+	auth := strings.TrimSpace(vals[0])
+	if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+		auth = strings.TrimSpace(auth[len("bearer "):])
+	}
+	return auth, true
+}
+
+// getOrCreateUser reads token from incoming metadata. If missing -> creates a new token.
+// Returns: (userID, token, createdNow, error)
+func (s *Server) getOrCreateUser(ctx context.Context) (string, string, bool, error) {
+	auth, ok := extractTokenFromMD(ctx)
+	if !ok {
 		uid := s.newUserID()
 		tok := s.signUserID(uid)
 		return uid, tok, true, nil
 	}
 
-	auth := strings.TrimSpace(vals[0])
-	if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
-		auth = strings.TrimSpace(auth[len("bearer "):])
-	}
-
-	uid, ok := s.parseUserID(auth)
-	if !ok || uid == "" {
+	uid, valid := s.parseUserID(auth)
+	if !valid || uid == "" {
 		// close to HTTP behaviour could be "create new", but explicit auth header usually means client expects auth.
 		return "", "", false, status.Error(codes.Unauthenticated, "invalid authorization")
 	}
@@ -262,19 +274,12 @@ func (s *Server) getOrCreateUser(ctx context.Context) (string, string, bool, err
 }
 
 func (s *Server) userIDFromAuth(ctx context.Context) (string, bool) {
-	md, _ := metadata.FromIncomingContext(ctx)
-	vals := md.Get(authHeaderKey)
-	if len(vals) == 0 || strings.TrimSpace(vals[0]) == "" {
+	auth, ok := extractTokenFromMD(ctx)
+	if !ok {
 		return "", false
 	}
-
-	auth := strings.TrimSpace(vals[0])
-	if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
-		auth = strings.TrimSpace(auth[len("bearer "):])
-	}
-
-	uid, ok := s.parseUserID(auth)
-	if !ok || uid == "" {
+	uid, valid := s.parseUserID(auth)
+	if !valid || uid == "" {
 		return "", false
 	}
 	return uid, true

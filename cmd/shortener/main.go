@@ -130,7 +130,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	grpcImpl := grpcapi.New(store, cfg.BaseURL, logger)
+	grpcImpl := grpcapi.New(store, cfg.BaseURL, logger, []byte(cfg.SecretKey))
 	grpcImpl.SetAuditor(aud)
 
 	grpcSrv := grpc.NewServer()
