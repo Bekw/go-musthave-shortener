@@ -9,8 +9,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -32,6 +35,8 @@ type Handler struct {
 	log        *zap.Logger         // Structured logger for request/error logging
 	secretKey  []byte              // HMAC secret key for signing user cookies
 	aud        *audit.Auditor      // Event auditor for tracking user actions
+
+	trustedSubnet *net.IPNet // Allowed client subnet for internal endpoints (nil => deny all)
 }
 
 type userURL struct {
@@ -63,6 +68,15 @@ func NewHandler(store model.Store, baseURL string, log *zap.Logger) *Handler {
 		log = zap.NewNop()
 	}
 
+	// Normalize base URL: allow passing without scheme in some environments.
+	// (Existing tests use a full URL, so this keeps backward compatibility.)
+	if baseURL != "" {
+		if u, err := url.Parse(baseURL); err == nil && u.Scheme == "" {
+			baseURL = "http://" + baseURL
+		}
+		baseURL = strings.TrimRight(baseURL, "/")
+	}
+
 	h := &Handler{
 		store:      store,
 		urlService: service.NewURLService(store, log),
@@ -72,6 +86,70 @@ func NewHandler(store model.Store, baseURL string, log *zap.Logger) *Handler {
 	}
 
 	return h
+}
+
+// SetTrustedSubnet configures CIDR used to protect internal endpoints.
+// Empty value means "deny all".
+func (h *Handler) SetTrustedSubnet(cidr string) error {
+	cidr = strings.TrimSpace(cidr)
+	if cidr == "" {
+		h.trustedSubnet = nil
+		return nil
+	}
+	_, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return fmt.Errorf("parse trusted subnet %q: %w", cidr, err)
+	}
+	h.trustedSubnet = ipNet
+	return nil
+}
+
+func (h *Handler) isInternalAllowed(r *http.Request) bool {
+	if h.trustedSubnet == nil {
+		return false
+	}
+	ipStr := strings.TrimSpace(r.Header.Get("X-Real-IP"))
+	if ipStr == "" {
+		return false
+	}
+
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		// Accept host:port forms if a proxy passes it that way.
+		if host, _, err := net.SplitHostPort(ipStr); err == nil {
+			ip = net.ParseIP(host)
+		}
+	}
+	if ip == nil {
+		return false
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		ip = ip4
+	}
+	return h.trustedSubnet.Contains(ip)
+}
+
+// InternalStatsHandler handles GET /api/internal/stats.
+// доступ разрешён только для доверенной подсети (X-Real-IP должен входить в trusted_subnet).
+func (h *Handler) InternalStatsHandler(w http.ResponseWriter, r *http.Request) {
+	if !h.isInternalAllowed(r) {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	urlsCount, usersCount, err := h.store.Stats(r.Context())
+	if err != nil {
+		h.log.Error("stats error", zap.Error(err))
+		http.Error(w, "storage error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]int{
+		"urls":  urlsCount,
+		"users": usersCount,
+	})
 }
 
 // newUserID generates a new unique user identifier.
@@ -489,6 +567,7 @@ func (h *Handler) publish(ctx context.Context, e audit.Event) {
 	}
 	h.aud.Publish(ctx, e)
 }
+
 // Shutdown gracefully stops background workers.
 func (h *Handler) Shutdown(ctx context.Context) error {
 	if h.urlService == nil {

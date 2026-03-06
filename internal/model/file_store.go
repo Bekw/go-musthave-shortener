@@ -24,10 +24,11 @@ type fileStore struct {
 func NewFileStore(path string) (Store, error) {
 	fs := &fileStore{
 		memoryStore: &memoryStore{
-			mu:      new(sync.RWMutex),
-			mp:      make(map[string]string),
-			ri:      make(map[string]string),
-			deleted: make(map[string]bool),
+			mu:       new(sync.RWMutex),
+			mp:       make(map[string]string),
+			ri:       make(map[string]string),
+			deleted:  make(map[string]bool),
+			userURLs: make(map[string]map[string]struct{}),
 		},
 		path: path,
 	}

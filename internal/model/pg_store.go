@@ -91,6 +91,21 @@ func (s *PGStore) Ping(ctx context.Context) error {
 	return s.db.PingContext(ctx)
 }
 
+func (s *PGStore) Stats(ctx context.Context) (urls int, users int, err error) {
+	err = s.db.QueryRowContext(ctx, `
+        SELECT
+          (SELECT COUNT(*) FROM urls WHERE is_deleted = FALSE) AS urls,
+          (SELECT COUNT(DISTINCT uu.user_id)
+             FROM user_urls uu
+             JOIN urls u ON u.id = uu.url_id
+            WHERE u.is_deleted = FALSE) AS users;
+    `).Scan(&urls, &users)
+	if err != nil {
+		return 0, 0, err
+	}
+	return urls, users, nil
+}
+
 // EnsureSchema creates required database tables and indexes if they do not exist.
 func EnsureSchema(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, `
